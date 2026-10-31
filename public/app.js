@@ -1,0 +1,375 @@
+/* Hebrew admin UI. Plain JS, talks to the same REST API that customers use. */
+(() => {
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const fmtDate = (d) => (d ? new Date(d).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '');
+  let token = null;
+  try { token = localStorage.getItem('token'); } catch {}
+  let me = null;
+
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method,
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = res.status === 204 ? null : await res.json().catch(() => null);
+    if (res.status === 401 && token) { logout(); throw new Error('יש להתחבר מחדש'); }
+    if (!res.ok) throw new Error(data?.error?.message || `שגיאה ${res.status}`);
+    return data;
+  }
+
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.remove('hidden');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => t.classList.add('hidden'), 3000);
+  }
+  function modal(html) { $('#modal-body').innerHTML = html; $('#modal').classList.remove('hidden'); }
+  function closeModal() { $('#modal').classList.add('hidden'); }
+  $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal' || e.target.dataset.close !== undefined) closeModal(); });
+
+  async function copy(text) { try { await navigator.clipboard.writeText(text); toast('הועתק'); } catch { toast('ההעתקה נכשלה'); } }
+  document.addEventListener('click', (e) => { const b = e.target.closest('[data-copy]'); if (b) copy(b.dataset.copy); });
+
+  const STATUS = {
+    verified: ['מאומת', 'good'], pending: ['ממתין', 'warn'], failed: ['נכשל', 'bad'], degraded: ['נפגע', 'bad'],
+    active: ['פעיל', 'good'], suspended: ['מושעה', 'bad'], unsubscribed: ['הוסר', 'warn'], bounced: ['חזר', 'bad'], complained: ['התלונן', 'bad'],
+    queued: ['בתור', 'warn'], sending: ['בשליחה', 'warn'], sent: ['נשלח', 'good'], delivered: ['נמסר', 'good'], suppressed: ['חסום', 'bad'],
+    draft: ['טיוטה', ''], scheduled: ['מתוזמן', 'warn'], paused: ['מושהה', 'bad'], cancelled: ['בוטל', ''],
+  };
+  const badge = (s) => { const [l, c] = STATUS[s] || [s, '']; return `<span class="badge ${c}">${esc(l)}</span>`; };
+
+  // ---------- Auth ----------
+  document.querySelectorAll('[data-auth-tab]').forEach((b) =>
+    b.addEventListener('click', () => {
+      document.querySelectorAll('[data-auth-tab]').forEach((x) => x.classList.toggle('active', x === b));
+      $('#login-form').classList.toggle('hidden', b.dataset.authTab !== 'login');
+      $('#signup-form').classList.toggle('hidden', b.dataset.authTab !== 'signup');
+    }),
+  );
+  const formData = (f) => Object.fromEntries(new FormData(f).entries());
+  async function authSubmit(e, path) {
+    e.preventDefault();
+    $('#auth-error').textContent = '';
+    try {
+      const r = await api('POST', path, formData(e.target));
+      token = r.token;
+      try { localStorage.setItem('token', token); } catch {}
+      await boot();
+    } catch (err) { $('#auth-error').textContent = err.message; }
+  }
+  $('#login-form').addEventListener('submit', (e) => authSubmit(e, '/v1/auth/login'));
+  $('#signup-form').addEventListener('submit', (e) => authSubmit(e, '/v1/auth/signup'));
+  function logout() {
+    if (token) fetch('/v1/auth/logout', { method: 'POST', headers: { authorization: `Bearer ${token}` } }).catch(() => {});
+    token = null;
+    try { localStorage.removeItem('token'); } catch {}
+    $('#shell').classList.add('hidden');
+    $('#auth').classList.remove('hidden');
+  }
+  $('#logout').addEventListener('click', logout);
+
+  // ---------- Routing ----------
+  const routes = {
+    dashboard: ['לוח בקרה', dashboard],
+    domains: ['דומיינים', domains],
+    senders: ['שולחים', senders, () => me.account.type === 'platform'],
+    emails: ['מיילים שנשלחו', emails],
+    contacts: ['אנשי קשר', contacts],
+    lists: ['רשימות', lists],
+    campaigns: ['דיוורים', campaigns],
+    keys: ['מפתחות API', keys],
+    webhooks: ['Webhooks', webhooks],
+    settings: ['הגדרות חשבון', settings],
+    admin: ['ניהול חשבונות', admin, () => me.user?.is_superadmin],
+  };
+  function renderNav(current) {
+    $('#nav').innerHTML = Object.entries(routes)
+      .filter(([, r]) => !r[2] || r[2]())
+      .map(([k, r]) => `<a href="#/${k}" class="${k === current ? 'active' : ''}">${esc(r[0])}</a>`)
+      .join('');
+  }
+  async function route() {
+    const [name, ...rest] = (location.hash.replace(/^#\//, '').split('?')[0] || 'dashboard').split('/');
+    const r = routes[name] || routes.dashboard;
+    renderNav(routes[name] ? name : 'dashboard');
+    $('#view').innerHTML = '<p class="muted">טוען…</p>';
+    try { await r[1](...rest); } catch (err) { $('#view').innerHTML = `<p class="error">${esc(err.message)}</p>`; }
+  }
+  window.addEventListener('hashchange', route);
+
+  async function boot() {
+    if (!token) { $('#auth').classList.remove('hidden'); return; }
+    me = await api('GET', '/v1/me');
+    $('#auth').classList.add('hidden');
+    $('#shell').classList.remove('hidden');
+    $('#brand').textContent = me.account.name;
+    $('#who').textContent = me.user?.email || '';
+    $('#banner').innerHTML = me.account.status === 'pending'
+      ? `<div class="banner">החשבון ממתין לאישור. עד האישור אפשר לשלוח עד ${me.account.daily_limit} מיילים ביום, ודיוורים לרשימות לא זמינים.</div>`
+      : me.account.status === 'suspended' ? `<div class="banner">החשבון מושעה. לבירור פנו לתמיכה.</div>` : '';
+    route();
+  }
+
+  // ---------- Views ----------
+  async function dashboard() {
+    me = await api('GET', '/v1/me');
+    const [doms, camps] = await Promise.all([api('GET', '/v1/domains'), api('GET', '/v1/campaigns?limit=5')]);
+    const verified = doms.filter((d) => d.status === 'verified').length;
+    $('#view').innerHTML = `<h1>לוח בקרה</h1>
+      <div class="grid">
+        <div class="card stat"><div class="n">${me.usage.today.toLocaleString('he-IL')}</div><div class="l">מיילים היום, מתוך ${me.usage.daily_limit.toLocaleString('he-IL')}</div></div>
+        <div class="card stat"><div class="n">${verified} / ${doms.length}</div><div class="l">דומיינים מאומתים</div></div>
+        <div class="card stat"><div class="n">${badge(me.account.status)}</div><div class="l">מצב החשבון</div></div>
+      </div>
+      ${doms.length === 0 ? `<div class="card" style="margin-top:16px"><b>הצעד הראשון: לאמת דומיין.</b> <p class="muted">אי אפשר לשלוח לפני שהדומיין שממנו שולחים מאומת. זה מה שמונע מהמיילים להגיע לספאם.</p><a href="#/domains">להוספת דומיין</a></div>` : ''}
+      <h2>דיוורים אחרונים</h2>
+      ${camps.length ? `<div class="table-wrap"><table><tr><th>שם</th><th>מצב</th><th>נוצר</th></tr>${camps.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>` : '<p class="muted">עוד אין דיוורים.</p>'}`;
+  }
+
+  const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC' };
+  function recordsTable(d) {
+    return `<div class="table-wrap"><table><tr><th>מטרה</th><th>סוג</th><th>שם (Host)</th><th>ערך</th><th>מצב</th></tr>
+      ${d.records.map((r) => `<tr><td>${PURPOSE[r.purpose] || r.purpose}</td><td>${r.type}</td>
+        <td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td>
+        <td class="ltr">${r.priority ? `${r.priority} ` : ''}${esc(r.value)} <button class="copy" data-copy="${esc(r.value)}">העתקה</button></td>
+        <td>${badge(r.status || 'pending')}</td></tr>`).join('')}</table></div>
+      <p class="muted">מוסיפים את הרשומות אצל ספק ה-DNS של הדומיין (למשל Cloudflare, Box, GoDaddy). בחלק מהספקים כותבים בשדה השם רק את החלק שלפני הדומיין. הבדיקה רצה אוטומטית כל 10 דקות, למשך 72 שעות.</p>`;
+  }
+  async function domains(id) {
+    if (id) {
+      const d = await api('GET', `/v1/domains/${id}`);
+      $('#view').innerHTML = `<div class="row between"><h1 class="ltr" style="text-align:right">${esc(d.name)} ${badge(d.status)}</h1>
+        <div class="row"><button class="primary" id="verify">בדיקה עכשיו</button><button class="danger" id="del">מחיקה</button></div></div>
+        <p>${d.status === 'verified' ? 'הדומיין מאומת ואפשר לשלוח ממנו מכל כתובת.' : 'כדי לאמת, צריך להוסיף את הרשומות הבאות ב-DNS של הדומיין:'}</p>
+        ${recordsTable(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
+      $('#verify').onclick = async () => { await api('POST', `/v1/domains/${id}/verify`); toast('נבדק'); domains(id); };
+      $('#del').onclick = async () => { if (confirm('למחוק את הדומיין? לא יהיה אפשר לשלוח ממנו.')) { await api('DELETE', `/v1/domains/${id}`); location.hash = '#/domains'; } };
+      return;
+    }
+    const list = await api('GET', '/v1/domains');
+    $('#view').innerHTML = `<h1>דומיינים</h1>
+      <form id="add" class="card row"><input name="name" placeholder="example.co.il" class="ltr" required style="flex:1;min-width:200px"><button class="primary">הוספת דומיין</button></form>
+      <h2>הדומיינים שלך</h2>
+      ${list.length ? `<div class="table-wrap"><table><tr><th>דומיין</th><th>מצב</th><th>DKIM</th><th>MAIL FROM</th><th>DMARC</th></tr>
+      ${list.filter((d) => !d.sender_id).map((d) => `<tr><td class="ltr"><a href="#/domains/${d.id}">${esc(d.name)}</a></td><td>${badge(d.status)}</td><td>${badge(d.checks.dkim)}</td><td>${badge(d.checks.mail_from)}</td><td>${badge(d.checks.dmarc)}</td></tr>`).join('')}
+      </table></div>` : '<p class="muted">עוד לא נוספו דומיינים.</p>'}`;
+    $('#add').onsubmit = async (e) => {
+      e.preventDefault();
+      try { const d = await api('POST', '/v1/domains', formData(e.target)); location.hash = `#/domains/${d.id}`; } catch (err) { toast(err.message); }
+    };
+  }
+
+  async function senders(id) {
+    if (id) {
+      const s = await api('GET', `/v1/senders/${id}`);
+      $('#view').innerHTML = `<h1>${esc(s.name)} ${badge(s.status)}</h1><p class="muted">מזהה חיצוני: <span class="ltr">${esc(s.external_id || '—')}</span> · מזהה: <span class="ltr">${s.id}</span></p>
+        <form id="add" class="card row"><input name="name" placeholder="הדומיין של השולח" class="ltr" required style="flex:1"><button class="primary">הוספת דומיין</button></form>
+        ${s.domains.map((d) => `<h2 class="ltr" style="text-align:right">${esc(d.name)} ${badge(d.status)}</h2>${recordsTable(d)}`).join('')}
+        <p><a href="#/senders">חזרה</a></p>`;
+      $('#add').onsubmit = async (e) => { e.preventDefault(); try { await api('POST', `/v1/senders/${id}/domains`, formData(e.target)); senders(id); } catch (err) { toast(err.message); } };
+      return;
+    }
+    const list = await api('GET', '/v1/senders?limit=200');
+    $('#view').innerHTML = `<h1>שולחים</h1><p class="muted">כל שולח הוא לקוח שלך (למשל עסק ברצף) עם דומיין משלו. שולח שלא אימת דומיין שולח מכתובת הגיבוי שלך.</p>
+      <form id="add" class="card row"><input name="name" placeholder="שם השולח" required style="flex:1"><input name="external_id" placeholder="מזהה אצלך (לא חובה)" class="ltr" style="flex:1"><button class="primary">הוספה</button></form>
+      <div class="table-wrap" style="margin-top:16px"><table><tr><th>שם</th><th>מזהה חיצוני</th><th>דומיינים</th></tr>
+      ${list.map((s) => `<tr><td><a href="#/senders/${s.id}">${esc(s.name)}</a></td><td class="ltr">${esc(s.external_id || '')}</td><td>${(s.domains || []).map((d) => `<span class="ltr">${esc(d.name)}</span> ${badge(d.status)}`).join('<br>')}</td></tr>`).join('')}</table></div>`;
+    $('#add').onsubmit = async (e) => { e.preventDefault(); const b = formData(e.target); if (!b.external_id) delete b.external_id; try { await api('POST', '/v1/senders', b); senders(); } catch (err) { toast(err.message); } };
+  }
+
+  async function emails() {
+    const list = await api('GET', '/v1/emails?limit=100');
+    $('#view').innerHTML = `<h1>מיילים שנשלחו</h1><p class="muted">מיילים בודדים שנשלחו דרך ה-API (לא כולל דיוורים).</p>
+      <div class="table-wrap"><table><tr><th>נמען</th><th>נושא</th><th>שולח</th><th>מצב</th><th>זמן</th></tr>
+      ${list.map((m) => `<tr><td class="ltr">${esc(m.to_email)}</td><td>${esc(m.subject)}</td><td class="ltr">${esc(m.from_email)}${m.used_fallback ? ' <span class="badge warn">גיבוי</span>' : ''}</td><td>${badge(m.status)}${m.last_error ? `<br><small>${esc(m.last_error)}</small>` : ''}</td><td>${fmtDate(m.created_at)}</td></tr>`).join('')}</table></div>`;
+  }
+
+  function parseCsv(text) {
+    const rows = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(/[,;\t]/).map((c) => c.trim().replace(/^"|"$/g, '')));
+    if (!rows.length) return [];
+    const head = rows[0].map((h) => h.toLowerCase());
+    const hasHead = head.some((h) => ['email', 'מייל', 'אימייל', 'דוא"ל'].includes(h));
+    const ei = hasHead ? head.findIndex((h) => ['email', 'מייל', 'אימייל', 'דוא"ל'].includes(h)) : 0;
+    const ni = hasHead ? head.findIndex((h) => ['name', 'שם'].includes(h)) : 1;
+    return rows.slice(hasHead ? 1 : 0).filter((r) => /@/.test(r[ei] || '')).map((r) => ({ email: r[ei], name: ni >= 0 ? r[ni] || null : null }));
+  }
+  async function contacts() {
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    const [data, ls] = await Promise.all([api('GET', `/v1/contacts?limit=100&search=${encodeURIComponent(q.get('s') || '')}`), api('GET', '/v1/lists')]);
+    $('#view').innerHTML = `<div class="row between"><h1>אנשי קשר <small>(${data.total.toLocaleString('he-IL')})</small></h1><button class="primary" id="imp">ייבוא מקובץ</button></div>
+      <form id="search" class="row"><input name="s" value="${esc(q.get('s') || '')}" placeholder="חיפוש לפי מייל או שם" style="flex:1"><button>חיפוש</button></form>
+      <div class="table-wrap" style="margin-top:12px"><table><tr><th>מייל</th><th>שם</th><th>מצב</th><th>מקור ההסכמה</th><th>נוסף</th></tr>
+      ${data.items.map((c) => `<tr><td class="ltr">${esc(c.email)}</td><td>${esc(c.name)}</td><td>${badge(c.status)}</td><td>${esc(c.consent_source)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
+    $('#search').onsubmit = (e) => { e.preventDefault(); location.hash = `#/contacts?s=${encodeURIComponent(formData(e.target).s)}`; };
+    $('#imp').onclick = () => {
+      modal(`<h2>ייבוא אנשי קשר</h2><p class="muted">קובץ CSV עם עמודת מייל, ואפשר גם עמודת שם. אפשר גם להדביק.</p>
+        <input type="file" id="file" accept=".csv,.txt"><label>או הדבקה<textarea id="paste" placeholder="email,name"></textarea></label>
+        <label>לרשימה<select id="list"><option value="">בלי רשימה</option>${ls.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></label>
+        <label>מאיפה הגיעה ההסכמה של הנמענים?<input id="src" placeholder="למשל: טופס הרשמה באתר" required></label>
+        <label><input type="checkbox" id="decl"> אני מאשר/ת שכל הנמענים בקובץ הסכימו לקבל ממני דיוור, כנדרש בחוק</label>
+        <p class="error" id="err"></p><div class="row"><button class="primary" id="go">ייבוא</button><button data-close>ביטול</button></div>`);
+      $('#file').onchange = async (e) => { $('#paste').value = await e.target.files[0].text(); };
+      $('#go').onclick = async () => {
+        const rows = parseCsv($('#paste').value);
+        if (!rows.length) return ($('#err').textContent = 'לא נמצאו כתובות מייל');
+        try {
+          const r = await api('POST', '/v1/contacts/import', { contacts: rows, list_ids: $('#list').value ? [$('#list').value] : [], consent_source: $('#src').value, consent_declared: $('#decl').checked });
+          closeModal(); toast(`יובאו ${r.imported} אנשי קשר`); contacts();
+        } catch (err) { $('#err').textContent = err.message; }
+      };
+    };
+  }
+
+  async function lists() {
+    const ls = await api('GET', '/v1/lists');
+    $('#view').innerHTML = `<h1>רשימות</h1>
+      <form id="add" class="card row"><input name="name" placeholder="שם הרשימה" required style="flex:1"><button class="primary">יצירת רשימה</button></form>
+      <div class="table-wrap" style="margin-top:16px"><table><tr><th>שם</th><th>חברים מאושרים</th><th>אישור כפול</th><th>טופס הרשמה</th></tr>
+      ${ls.map((l) => `<tr><td>${esc(l.name)}</td><td>${l.members.toLocaleString('he-IL')}</td><td>${l.double_opt_in ? (l.from_email ? 'כן' : '<small>חסרה כתובת שולח למייל האישור</small>') : 'לא'}</td>
+        <td class="ltr">POST ${location.origin}/s/${l.id} <button class="copy" data-copy="${location.origin}/s/${l.id}">העתקה</button></td></tr>`).join('')}</table></div>
+      <p class="muted">טופס הרשמה באתר שולח את השדות email ו-name לכתובת שבטבלה. ברשימה עם אישור כפול הנרשם מקבל מייל אישור לפני שהוא נכנס לרשימה.</p>`;
+    $('#add').onsubmit = async (e) => { e.preventDefault(); await api('POST', '/v1/lists', { ...formData(e.target), double_opt_in: false }); lists(); };
+  }
+
+  function campaignForm(c, ls) {
+    const sel = new Set((c?.lists || []).map((l) => l.id));
+    return `<form id="cf" class="card">
+      <label>שם פנימי<input name="name" value="${esc(c?.name)}" required></label>
+      <label>נושא <small>(אפשר {{name}}. המילה «פרסומת» מתווספת אוטומטית)</small><input name="subject" value="${esc(c?.subject)}" required></label>
+      <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
+      <label style="flex:1">כתובת השולח<input name="from_email" class="ltr" value="${esc(c?.from_email)}" placeholder="news@example.co.il" required></label></div>
+      <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
+      <label>רשימות יעד</label><div class="row" style="margin-bottom:12px">${ls.map((l) => `<label style="font-weight:400"><input type="checkbox" name="list" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>${esc(l.name)} (${l.members})</label>`).join('') || '<span class="muted">אין רשימות</span>'}</div>
+      <label>תוכן HTML <small>(התחתית עם פרטי העסק וקישור ההסרה מתווספת אוטומטית)</small><textarea name="html" style="min-height:260px">${esc(c?.html || '<div dir="rtl" style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6">\n  <p>שלום {{name}},</p>\n  <p></p>\n</div>')}</textarea></label>
+      <div class="row"><button class="primary">שמירה</button><a href="#/campaigns">ביטול</a></div></form>`;
+  }
+  function readCampaignForm(f) {
+    const b = formData(f);
+    delete b.list;
+    b.list_ids = [...f.querySelectorAll('input[name=list]:checked')].map((x) => x.value);
+    if (!b.reply_to) b.reply_to = null;
+    return b;
+  }
+  async function campaigns(id, sub) {
+    const ls = await api('GET', '/v1/lists');
+    if (id === 'new' || sub === 'edit') {
+      const c = id === 'new' ? null : await api('GET', `/v1/campaigns/${id}`);
+      $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls)}`;
+      $('#cf').onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r = await api(c ? 'PATCH' : 'POST', c ? `/v1/campaigns/${id}` : '/v1/campaigns', readCampaignForm(e.target)); location.hash = `#/campaigns/${r.id}`; } catch (err) { toast(err.message); }
+      };
+      return;
+    }
+    if (id) {
+      const c = await api('GET', `/v1/campaigns/${id}`);
+      const s = c.stats;
+      const pct = (n) => (s.sent ? `${((n / s.sent) * 100).toFixed(1)}%` : '—');
+      $('#view').innerHTML = `<div class="row between"><h1>${esc(c.name)} ${badge(c.status)}</h1><div class="row">
+        ${['draft', 'scheduled', 'paused'].includes(c.status) ? `<a href="#/campaigns/${id}/edit"><button>עריכה</button></a><button id="test">שליחת בדיקה</button>` : ''}
+        ${['draft'].includes(c.status) ? '<button class="primary" id="send">שליחה</button>' : ''}
+        ${['scheduled', 'sending'].includes(c.status) ? '<button id="pause">השהיה</button>' : ''}
+        ${c.status === 'paused' ? '<button class="primary" id="resume">המשך שליחה</button>' : ''}
+        ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
+        ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
+        <p><b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}</p>
+        <div class="grid">
+          <div class="card stat"><div class="n">${s.sent}</div><div class="l">נשלחו (${s.queued} בתור)</div></div>
+          <div class="card stat"><div class="n">${pct(s.opened)}</div><div class="l">פתחו (${s.opened})</div></div>
+          <div class="card stat"><div class="n">${pct(s.clicked)}</div><div class="l">הקליקו (${s.clicked})</div></div>
+          <div class="card stat"><div class="n">${pct(s.bounced)}</div><div class="l">חזרו (${s.bounced})</div></div>
+          <div class="card stat"><div class="n">${s.complained}</div><div class="l">תלונות ספאם</div></div>
+          <div class="card stat"><div class="n">${s.unsubscribed}</div><div class="l">הסירו את עצמם</div></div>
+        </div>
+        <h2>תצוגה מקדימה</h2><iframe sandbox style="width:100%;height:480px;border:1px solid var(--line);border-radius:10px;background:#fff" srcdoc="${esc(c.html)}"></iframe>`;
+      const act = (sel, fn) => { const b = $(sel); if (b) b.onclick = async () => { try { await fn(); campaigns(id); } catch (err) { toast(err.message); } }; };
+      act('#send', async () => { if (confirm('לשלוח את הדיוור עכשיו לכל הנמענים ברשימות?')) await api('POST', `/v1/campaigns/${id}/send`, {}); });
+      act('#pause', () => api('POST', `/v1/campaigns/${id}/pause`));
+      act('#resume', () => api('POST', `/v1/campaigns/${id}/resume`));
+      act('#cancel', async () => { if (confirm('לבטל את הדיוור? מיילים שעוד לא נשלחו לא יישלחו.')) await api('POST', `/v1/campaigns/${id}/cancel`); });
+      act('#test', async () => { const to = prompt('לאיזו כתובת לשלוח בדיקה?', me.user?.email || ''); if (to) { await api('POST', `/v1/campaigns/${id}/test`, { to: [to] }); toast('נשלחה בדיקה'); } });
+      return;
+    }
+    const list = await api('GET', '/v1/campaigns?limit=100');
+    $('#view').innerHTML = `<div class="row between"><h1>דיוורים</h1><a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a></div>
+      <div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>מצב</th><th>נוצר</th></tr>
+      ${list.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${esc(c.subject)}</td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
+  }
+
+  async function keys() {
+    const list = await api('GET', '/v1/api-keys');
+    $('#view').innerHTML = `<h1>מפתחות API</h1><p class="muted">שולחים את המפתח בכותרת <span class="ltr">Authorization: Bearer &lt;key&gt;</span>. המפתח מוצג פעם אחת בלבד.</p>
+      <form id="add" class="card row"><input name="name" placeholder="שם המפתח, למשל: שרת ייצור" required style="flex:1"><button class="primary">יצירת מפתח</button></form>
+      <div id="newkey"></div>
+      <div class="table-wrap" style="margin-top:16px"><table><tr><th>שם</th><th>תחילית</th><th>שימוש אחרון</th><th></th></tr>
+      ${list.map((k) => `<tr><td>${esc(k.name)}</td><td class="ltr">${esc(k.prefix)}…</td><td>${fmtDate(k.last_used_at) || '—'}</td><td><button class="danger" data-revoke="${k.id}">ביטול</button></td></tr>`).join('')}</table></div>`;
+    $('#add').onsubmit = async (e) => {
+      e.preventDefault();
+      const k = await api('POST', '/v1/api-keys', formData(e.target));
+      $('#newkey').innerHTML = `<div class="keybox" style="margin-top:12px"><b>המפתח החדש (שמרו אותו עכשיו):</b><div class="ltr" style="margin:8px 0">${esc(k.key)}</div><button class="copy" data-copy="${esc(k.key)}">העתקה</button></div>`;
+    };
+    document.querySelectorAll('[data-revoke]').forEach((b) => (b.onclick = async () => { if (confirm('לבטל את המפתח? מערכות שמשתמשות בו יפסיקו לעבוד.')) { await api('DELETE', `/v1/api-keys/${b.dataset.revoke}`); keys(); } }));
+  }
+
+  async function webhooks() {
+    const list = await api('GET', '/v1/webhooks');
+    $('#view').innerHTML = `<h1>Webhooks</h1><p class="muted">המערכת שולחת POST לכתובת שלך על כל אירוע (נמסר, חזר, תלונה, פתיחה, הסרה, אימות דומיין). הבקשה חתומה בכותרת <span class="ltr">X-Mailer-Signature</span>.</p>
+      <form id="add" class="card row"><input name="url" class="ltr" placeholder="https://example.co.il/hooks/mail" required style="flex:1"><button class="primary">הוספה</button></form>
+      <div id="secret"></div>
+      <div class="table-wrap" style="margin-top:16px"><table><tr><th>כתובת</th><th>אירועים</th><th></th></tr>
+      ${list.map((w) => `<tr><td class="ltr">${esc(w.url)}</td><td>${w.events.length ? w.events.join(', ') : 'הכל'}</td><td><button class="danger" data-del="${w.id}">מחיקה</button></td></tr>`).join('')}</table></div>`;
+    $('#add').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const w = await api('POST', '/v1/webhooks', formData(e.target));
+        $('#secret').innerHTML = `<div class="keybox" style="margin-top:12px"><b>סוד החתימה (מוצג פעם אחת):</b><div class="ltr">${esc(w.secret)}</div><button class="copy" data-copy="${esc(w.secret)}">העתקה</button></div>`;
+      } catch (err) { toast(err.message); }
+    };
+    document.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => { await api('DELETE', `/v1/webhooks/${b.dataset.del}`); webhooks(); }));
+  }
+
+  async function settings() {
+    me = await api('GET', '/v1/me');
+    const a = me.account;
+    $('#view').innerHTML = `<h1>הגדרות חשבון</h1><form id="f" class="card">
+      <label>שם החשבון<input name="name" value="${esc(a.name)}"></label>
+      <h2>פרטים לתחתית הדיוור <small>(חובה לפי חוק הספאם)</small></h2>
+      <label>שם העסק<input name="company_name" value="${esc(a.company_name)}"></label>
+      <label>כתובת<input name="company_address" value="${esc(a.company_address)}"></label>
+      <label>מייל ליצירת קשר<input name="contact_email" class="ltr" value="${esc(a.contact_email)}"></label>
+      <label><input type="checkbox" name="track_transactional" ${a.track_transactional ? 'checked' : ''}> מעקב פתיחות והקלקות גם במיילים תפעוליים</label>
+      ${a.type === 'platform' ? `<h2>כתובת גיבוי לשולחים לא מאומתים</h2>
+      <label>כתובת השולח <small>(על דומיין מאומת של החשבון, אי אפשר להשיב אליה)</small><input name="fallback_from_email" class="ltr" value="${esc(a.fallback_from_email)}" placeholder="noreply@docs.example.co.il"></label>
+      <label>תבנית שם השולח<input name="fallback_name_template" value="${esc(a.fallback_name_template)}"></label>
+      <p class="muted">{{name}} = השם שהתבקש, {{account}} = שם החשבון. למשל: «{{name}} באמצעות רצף».</p>` : ''}
+      <button class="primary">שמירה</button></form>`;
+    $('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const b = formData(e.target);
+      b.track_transactional = !!e.target.track_transactional.checked;
+      for (const k of ['company_name', 'company_address', 'contact_email', 'fallback_from_email']) if (k in b && !b[k]) b[k] = null;
+      try { await api('PATCH', '/v1/account', b); toast('נשמר'); } catch (err) { toast(err.message); }
+    };
+  }
+
+  async function admin() {
+    const list = await api('GET', '/admin/accounts');
+    $('#view').innerHTML = `<h1>ניהול חשבונות</h1><div class="table-wrap"><table><tr><th>חשבון</th><th>סוג</th><th>מצב</th><th>מכסה יומית</th><th>30 יום: נשלחו / חזרו / תלונות</th><th></th></tr>
+      ${list.map((a) => `<tr><td>${esc(a.name)}<br><small class="ltr">${esc(a.contact_email)}</small></td><td>${a.type === 'platform' ? 'פלטפורמה' : 'רגיל'}</td><td>${badge(a.status)}</td><td>${a.daily_limit.toLocaleString('he-IL')}</td>
+        <td>${a.sent_30d} / ${a.bounced_30d} / ${a.complained_30d}</td><td><button data-edit="${a.id}">עריכה</button></td></tr>`).join('')}</table></div>`;
+    document.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
+      const a = list.find((x) => x.id === b.dataset.edit);
+      modal(`<h2>${esc(a.name)}</h2><form id="af">
+        <label>מצב<select name="status">${['pending', 'active', 'suspended'].map((s) => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${STATUS[s][0]}</option>`).join('')}</select></label>
+        <label>סוג<select name="type"><option value="standard" ${a.type === 'standard' ? 'selected' : ''}>רגיל</option><option value="platform" ${a.type === 'platform' ? 'selected' : ''}>פלטפורמה</option></select></label>
+        <label>מכסה יומית<input name="daily_limit" type="number" value="${a.daily_limit}"></label>
+        <div class="row"><button class="primary">שמירה</button><button type="button" data-close>ביטול</button></div></form>`);
+      $('#af').onsubmit = async (e) => { e.preventDefault(); const f = formData(e.target); await api('PATCH', `/admin/accounts/${a.id}`, { ...f, daily_limit: Number(f.daily_limit) }); closeModal(); admin(); };
+    }));
+  }
+
+  boot().catch(() => logout());
+})();

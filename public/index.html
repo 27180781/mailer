@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>מערכת דיוור</title>
+  <link rel="stylesheet" href="/app/app.css">
+</head>
+<body>
+  <div id="auth" class="auth hidden">
+    <div class="card auth-card">
+      <h1>מערכת דיוור</h1>
+      <div class="tabs">
+        <button data-auth-tab="login" class="active">כניסה</button>
+        <button data-auth-tab="signup">פתיחת חשבון</button>
+      </div>
+      <form id="login-form">
+        <label>מייל<input name="email" type="email" required autocomplete="email"></label>
+        <label>סיסמה<input name="password" type="password" required autocomplete="current-password"></label>
+        <button class="primary" type="submit">כניסה</button>
+      </form>
+      <form id="signup-form" class="hidden">
+        <label>שם מלא<input name="name" required></label>
+        <label>שם העסק<input name="account_name" required></label>
+        <label>כתובת העסק <small>(מופיעה בתחתית הדיוורים, לפי החוק)</small><input name="company_address"></label>
+        <label>מייל<input name="email" type="email" required autocomplete="email"></label>
+        <label>סיסמה <small>(10 תווים לפחות)</small><input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
+        <button class="primary" type="submit">פתיחת חשבון</button>
+      </form>
+      <p class="error" id="auth-error"></p>
+    </div>
+  </div>
+
+  <div id="shell" class="shell hidden">
+    <aside class="nav">
+      <div class="brand" id="brand">מערכת דיוור</div>
+      <nav id="nav"></nav>
+      <div class="nav-foot">
+        <div id="who"></div>
+        <button class="link" id="logout">יציאה</button>
+      </div>
+    </aside>
+    <main>
+      <div id="banner"></div>
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden"><div class="card modal-card"><div id="modal-body"></div></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app/app.js"></script>
+</body>
+</html>
