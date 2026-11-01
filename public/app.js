@@ -80,6 +80,7 @@
     contacts: ['אנשי קשר', contacts],
     lists: ['רשימות', lists],
     campaigns: ['דיוורים', campaigns],
+    templates: ['תבניות', templates],
     keys: ['מפתחות API', keys],
     webhooks: ['Webhooks', webhooks],
     settings: ['הגדרות חשבון', settings],
@@ -234,17 +235,62 @@
     $('#add').onsubmit = async (e) => { e.preventDefault(); await api('POST', '/v1/lists', { ...formData(e.target), double_opt_in: false }); lists(); };
   }
 
-  function campaignForm(c, ls) {
+  const STARTER_HTML = `<!doctype html>
+<html lang="he" dir="rtl">
+<body style="margin:0;background:#f5f5f4">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f4">
+    <tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px">
+        <tr><td dir="rtl" style="padding:32px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.7;color:#1c1917;text-align:right">
+          <h1 style="margin:0 0 16px;font-size:24px">כותרת</h1>
+          <p style="margin:0 0 16px">שלום {{name}},</p>
+          <p style="margin:0 0 24px">כאן כותבים את התוכן.</p>
+          <a href="https://example.co.il" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold">לפרטים</a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  /** HTML textarea with a live preview underneath. Merge tags are filled with sample values. */
+  function htmlEditor(value, name = 'html') {
+    return `<label>תוכן HTML <small>(אפשר {{name}}, {{email}}, {{attr.שדה}}. בדיוור, התחתית עם פרטי העסק וקישור ההסרה מתווספת אוטומטית)</small>
+      <textarea name="${name}" data-preview="pv-${name}" style="min-height:260px">${esc(value)}</textarea></label>
+      <div class="row between"><b>תצוגה מקדימה</b><small class="muted">עם נתוני דוגמה</small></div>
+      <iframe id="pv-${name}" sandbox style="width:100%;height:420px;border:1px solid var(--line);border-radius:10px;background:#fff;margin:6px 0 16px"></iframe>`;
+  }
+  const sampleVars = { name: 'דנה', email: 'dana@example.co.il', attr: {} };
+  function fillSample(html) {
+    return html.replace(/\{\{\s*([^}\s]+)\s*\}\}/g, (_, k) => {
+      const key = k === 'שם' ? 'name' : k === 'מייל' ? 'email' : k;
+      const v = key.split('.').reduce((o, x) => (o == null ? undefined : o[x]), sampleVars);
+      return esc(v ?? `[${k}]`);
+    });
+  }
+  function bindPreviews(root = document) {
+    root.querySelectorAll('textarea[data-preview]').forEach((ta) => {
+      const frame = document.getElementById(ta.dataset.preview);
+      const update = () => { frame.srcdoc = fillSample(ta.value); };
+      let t;
+      ta.addEventListener('input', () => { clearTimeout(t); t = setTimeout(update, 250); });
+      update();
+    });
+  }
+
+  function campaignForm(c, ls, tpls, preset) {
     const sel = new Set((c?.lists || []).map((l) => l.id));
+    const html = c?.html || preset?.html || STARTER_HTML;
     return `<form id="cf" class="card">
-      <label>שם פנימי<input name="name" value="${esc(c?.name)}" required></label>
-      <label>נושא <small>(אפשר {{name}}. המילה «פרסומת» מתווספת אוטומטית)</small><input name="subject" value="${esc(c?.subject)}" required></label>
+      ${tpls.length ? `<label>טעינה מתבנית<select id="tpl-pick"><option value="">בחירת תבנית…</option>${tpls.map((t) => `<option value="${t.id}" ${preset?.id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>` : ''}
+      <label>שם פנימי<input name="name" value="${esc(c?.name || (preset ? preset.name : ''))}" required></label>
+      <label>נושא <small>(אפשר {{name}}. המילה «פרסומת» מתווספת אוטומטית)</small><input name="subject" value="${esc(c?.subject || preset?.subject || '')}" required></label>
       <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
       <label style="flex:1">כתובת השולח<input name="from_email" class="ltr" value="${esc(c?.from_email)}" placeholder="news@example.co.il" required></label></div>
       <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
       <label>רשימות יעד</label><div class="row" style="margin-bottom:12px">${ls.map((l) => `<label style="font-weight:400"><input type="checkbox" name="list" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>${esc(l.name)} (${l.members})</label>`).join('') || '<span class="muted">אין רשימות</span>'}</div>
-      <label>תוכן HTML <small>(התחתית עם פרטי העסק וקישור ההסרה מתווספת אוטומטית)</small><textarea name="html" style="min-height:260px">${esc(c?.html || '<div dir="rtl" style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6">\n  <p>שלום {{name}},</p>\n  <p></p>\n</div>')}</textarea></label>
-      <div class="row"><button class="primary">שמירה</button><a href="#/campaigns">ביטול</a></div></form>`;
+      ${htmlEditor(html)}
+      <div class="row"><button class="primary">שמירה</button><button type="button" id="save-tpl">שמירה כתבנית</button><a href="#/campaigns">ביטול</a></div></form>`;
   }
   function readCampaignForm(f) {
     const b = formData(f);
@@ -257,7 +303,27 @@
     const ls = await api('GET', '/v1/lists');
     if (id === 'new' || sub === 'edit') {
       const c = id === 'new' ? null : await api('GET', `/v1/campaigns/${id}`);
-      $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls)}`;
+      const tpls = await api('GET', '/v1/templates');
+      const presetId = new URLSearchParams(location.hash.split('?')[1] || '').get('template');
+      const preset = !c && presetId ? tpls.find((t) => t.id === presetId) : null;
+      $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls, tpls, preset)}`;
+      bindPreviews();
+      const form = $('#cf');
+      const pick = $('#tpl-pick');
+      if (pick) pick.onchange = () => {
+        const t = tpls.find((x) => x.id === pick.value);
+        if (!t) return;
+        const dirty = form.html.value.trim() && form.html.value !== STARTER_HTML;
+        if (dirty && !confirm('לטעון את התבנית? התוכן הנוכחי יוחלף.')) { pick.value = ''; return; }
+        form.html.value = t.html;
+        if (t.subject && (!form.subject.value || confirm('להחליף גם את הנושא בנושא של התבנית?'))) form.subject.value = t.subject;
+        form.html.dispatchEvent(new Event('input'));
+      };
+      $('#save-tpl').onclick = async () => {
+        const name = prompt('שם התבנית:', form.name.value || '');
+        if (!name) return;
+        try { await api('POST', '/v1/templates', { name, subject: form.subject.value, html: form.html.value }); toast('נשמרה תבנית'); } catch (err) { toast(err.message); }
+      };
       $('#cf').onsubmit = async (e) => {
         e.preventDefault();
         try { const r = await api(c ? 'PATCH' : 'POST', c ? `/v1/campaigns/${id}` : '/v1/campaigns', readCampaignForm(e.target)); location.hash = `#/campaigns/${r.id}`; } catch (err) { toast(err.message); }
@@ -297,6 +363,42 @@
     $('#view').innerHTML = `<div class="row between"><h1>דיוורים</h1><a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a></div>
       <div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>מצב</th><th>נוצר</th></tr>
       ${list.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${esc(c.subject)}</td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
+  }
+
+  async function templates(id) {
+    if (id) {
+      const t = id === 'new' ? null : await api('GET', `/v1/templates/${id}`);
+      $('#view').innerHTML = `<h1>${t ? 'עריכת תבנית' : 'תבנית חדשה'}</h1>
+        <form id="tf" class="card">
+          <label>שם התבנית<input name="name" value="${esc(t?.name)}" required></label>
+          <label>נושא ברירת מחדל <small>(לא חובה)</small><input name="subject" value="${esc(t?.subject)}"></label>
+          ${htmlEditor(t?.html || STARTER_HTML)}
+          <div class="row"><button class="primary">שמירה</button>
+          ${t ? `<a href="#/campaigns/new?template=${t.id}"><button type="button">דיוור חדש מהתבנית</button></a><button type="button" id="dup">שכפול</button><button type="button" class="danger" id="del">מחיקה</button>` : ''}
+          <a href="#/templates">ביטול</a></div>
+        </form>`;
+      bindPreviews();
+      $('#tf').onsubmit = async (e) => {
+        e.preventDefault();
+        const b = formData(e.target);
+        try {
+          const r = await api(t ? 'PATCH' : 'POST', t ? `/v1/templates/${id}` : '/v1/templates', b);
+          toast('נשמר');
+          if (!t) location.hash = `#/templates/${r.id}`;
+        } catch (err) { toast(err.message); }
+      };
+      if (t) {
+        $('#dup').onclick = async () => { const r = await api('POST', '/v1/templates', { name: `${t.name} (עותק)`, subject: t.subject, html: $('#tf').html.value }); location.hash = `#/templates/${r.id}`; };
+        $('#del').onclick = async () => { if (confirm('למחוק את התבנית? דיוורים שכבר נוצרו ממנה לא יושפעו.')) { await api('DELETE', `/v1/templates/${id}`); location.hash = '#/templates'; } };
+      }
+      return;
+    }
+    const list = await api('GET', '/v1/templates');
+    $('#view').innerHTML = `<div class="row between"><h1>תבניות</h1><a href="#/templates/new"><button class="primary">תבנית חדשה</button></a></div>
+      <p class="muted">תבנית היא עיצוב ותוכן שאפשר לטעון לכל דיוור חדש. שינוי בתבנית לא משנה דיוורים שכבר נוצרו ממנה.</p>
+      ${list.length ? `<div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>עודכנה</th><th></th></tr>
+      ${list.map((t) => `<tr><td><a href="#/templates/${t.id}">${esc(t.name)}</a></td><td>${esc(t.subject)}</td><td>${fmtDate(t.updated_at)}</td>
+        <td><a href="#/campaigns/new?template=${t.id}">דיוור מהתבנית</a></td></tr>`).join('')}</table></div>` : '<p class="muted">עוד אין תבניות. אפשר ליצור אחת כאן, או לשמור דיוור קיים כתבנית.</p>'}`;
   }
 
   async function keys() {
