@@ -31,6 +31,9 @@ export const config = {
   },
   // Global ceiling on emails per second across all accounts (provider quota)
   maxSendRate: Number(env('MAX_SEND_RATE', '14')),
+  // System-wide cap on emails sent in any rolling 24 hours (0 = no cap). Keep it below the SES
+  // daily quota when the AWS account is shared with another system (e.g. Retzef).
+  dailySendCap: Number(env('DAILY_SEND_CAP', '0')),
   newAccountDailyLimit: Number(env('NEW_ACCOUNT_DAILY_LIMIT', '200')),
   apiRateLimitPerMinute: Number(env('API_RATE_LIMIT_PER_MINUTE', '120')),
   // Domains whose SES identity is managed outside this system (same AWS account), e.g. retsef.co.il.

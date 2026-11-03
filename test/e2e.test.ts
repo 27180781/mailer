@@ -253,3 +253,23 @@ test('DNS zone file download and regional DKIM target', async () => {
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-disposition']), /attachment; filename="dns-/);
 });
+
+test('system-wide daily cap holds mail in the queue instead of sending', async () => {
+  const { config } = await import('../src/config.js');
+  const { remainingDailyCap } = await import('../src/worker.js');
+  const [{ n }] = await query(`SELECT count(*)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours'`);
+  config.dailySendCap = n; // already at the cap
+  try {
+    assert.equal(await remainingDailyCap(), 0);
+    const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+    const e = await api('POST', '/v1/emails', u.body.token, { from: 'noreply@docs.retzef.test', to: 'cap@client.test', subject: 'cap', text: 'x' });
+    assert.equal(e.body.messages[0].status, 'queued');
+    assert.equal(await sendBatch(50), 0);
+    const [m] = await query(`SELECT status FROM messages WHERE id = $1`, [e.body.messages[0].id]);
+    assert.equal(m.status, 'queued');
+    config.dailySendCap = n + 1;
+    assert.equal(await sendBatch(50), 1);
+  } finally {
+    config.dailySendCap = 0;
+  }
+});

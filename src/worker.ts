@@ -21,9 +21,26 @@ async function claim(limit: number) {
   );
 }
 
+let capWarnedAt = 0;
+
+/** How many more emails may go out under DAILY_SEND_CAP (rolling 24 hours). */
+export async function remainingDailyCap(): Promise<number> {
+  if (!config.dailySendCap) return Infinity;
+  const [row] = await query<{ n: number }>(`SELECT count(*)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours'`);
+  return Math.max(0, config.dailySendCap - (row?.n ?? 0));
+}
+
 /** Claims and sends one batch. Returns how many messages were handled. */
 export async function sendBatch(limit = config.maxSendRate) {
-  const batch = await claim(limit);
+  const remaining = await remainingDailyCap();
+  if (remaining <= 0) {
+    if (Date.now() - capWarnedAt > 15 * 60_000) {
+      console.warn(`daily send cap reached (${config.dailySendCap} in 24h); queued mail waits`);
+      capWarnedAt = Date.now();
+    }
+    return 0;
+  }
+  const batch = await claim(Math.min(limit, remaining));
   await Promise.all(
     batch.map((m) =>
       processMessage(m).catch(async (err) => {
