@@ -78,6 +78,12 @@
 }
 ```
 
+**מה מוגדר בפועל (3.11.2026):** ב-stack בשם `mailer-ses` יש למשתמש שתי הצהרות:
+- `SesInIsraelOnly` (Allow): כל הפעולות שלמעלה, ועוד SendBulkEmail, ListEmailIdentities, הגדרות DKIM, רשימת חסומים ותגיות. הכל על Resource `*`, עם התנאי `aws:RequestedRegion=il-central-1`.
+- `DenyRetzefIdentity` (Deny): חוסמת על `identity/retsef.co.il` ועל `configuration-set/retzef-transactional` שליחה (כולל SendBulkEmail), יצירה ומחיקה, הגדרות DKIM, MAIL FROM, feedback ו-configuration set, ותגיות.
+
+לכן שליחה מתת-דומיין של `retsef.co.il` עובדת רק אם התת-דומיין מאומת כ-identity נפרד. אחרת SES מנסה לשלוח דרך ה-identity של הדומיין הראשי, והשליחה נחסמת.
+
 ה-Resource של ההרשאה הראשונה הוא `*`, כי כל לקוח של המערכת מאמת דומיין משלו, ואי אפשר לדעת מראש מה הדומיינים. ההרשאה השנייה חוסמת ברמת AWS כל שינוי או שליחה דרך ה-identity של רצף, גם אם תהיה תקלה בקוד.
 
 ## משתני סביבה באפליקציה ב-CapRover
