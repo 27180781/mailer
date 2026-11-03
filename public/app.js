@@ -30,6 +30,17 @@
   function closeModal() { $('#modal').classList.add('hidden'); }
   $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal' || e.target.dataset.close !== undefined) closeModal(); });
 
+  /** Downloads a file from an authenticated API path. */
+  async function download(path, filename) {
+    const res = await fetch(path, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) { toast('ההורדה נכשלה'); return; }
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement('a'), { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  document.addEventListener('click', (e) => { const b = e.target.closest('[data-zone]'); if (b) download(`/v1/domains/${b.dataset.zone}/zone`, `dns-${b.dataset.name}.txt`); });
+
   async function copy(text) { try { await navigator.clipboard.writeText(text); toast('הועתק'); } catch { toast('ההעתקה נכשלה'); } }
   document.addEventListener('click', (e) => { const b = e.target.closest('[data-copy]'); if (b) copy(b.dataset.copy); });
 
@@ -132,12 +143,14 @@
 
   const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC' };
   function recordsTable(d) {
-    return `<div class="table-wrap"><table><tr><th>מטרה</th><th>סוג</th><th>שם (Host)</th><th>ערך</th><th>מצב</th></tr>
+    const pending = d.records.some((r) => r.status !== 'verified');
+    return `${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>הדרך הקלה: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
+      <button class="primary" data-zone="${d.id}" data-name="${esc(d.name)}">הורדת קובץ DNS</button></div>` : ''}<div class="table-wrap"><table><tr><th>מטרה</th><th>סוג</th><th>שם (Host)</th><th>ערך</th><th>מצב</th></tr>
       ${d.records.map((r) => `<tr><td>${PURPOSE[r.purpose] || r.purpose}</td><td>${r.type}</td>
         <td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td>
         <td class="ltr">${r.priority ? `${r.priority} ` : ''}${esc(r.value)} <button class="copy" data-copy="${esc(r.value)}">העתקה</button></td>
         <td>${badge(r.status || 'pending')}</td></tr>`).join('')}</table></div>
-      <p class="muted">מוסיפים את הרשומות אצל ספק ה-DNS של הדומיין (למשל Cloudflare, Box, GoDaddy). בחלק מהספקים כותבים בשדה השם רק את החלק שלפני הדומיין. הבדיקה רצה אוטומטית כל 10 דקות, למשך 72 שעות.</p>`;
+      <p class="muted">או ידנית: מוסיפים את הרשומות אצל ספק ה-DNS של הדומיין (למשל Cloudflare, Box, GoDaddy). בחלק מהספקים כותבים בשדה השם רק את החלק שלפני הדומיין. הבדיקה רצה אוטומטית כל 10 דקות, למשך 72 שעות.</p>`;
   }
   async function domains(id) {
     if (id) {

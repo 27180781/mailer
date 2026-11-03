@@ -5,7 +5,7 @@ import { one, query, tx } from '../db.js';
 import { hashPassword, verifyPassword, sha256 } from '../crypto.js';
 import { ApiError, notFound } from '../errors.js';
 import { authenticate, createApiKey, createSession, requirePlatform, requireSuperAdmin } from '../auth.js';
-import { addDomain, checkDomain, deleteDomain, publicDomain } from '../services/domains.js';
+import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '../services/domains.js';
 import { enqueueEmail, resolveFrom, sentToday } from '../services/send.js';
 import { campaignStats } from '../services/campaigns.js';
 import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
@@ -238,6 +238,13 @@ export async function apiRoutes(app: FastifyInstance) {
     r.get('/v1/domains/:id', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
       return publicDomain(await owned('domains', id, req.auth.account.id, 'הדומיין'));
+    });
+    /** DNS records as a zone file for import (Cloudflare: DNS → Records → Import and Export). */
+    r.get('/v1/domains/:id/zone', async (req, reply) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      reply.header('content-type', 'text/plain; charset=utf-8').header('content-disposition', `attachment; filename="dns-${row.name}.txt"`);
+      return zoneFile(row);
     });
     r.post('/v1/domains/:id/verify', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);

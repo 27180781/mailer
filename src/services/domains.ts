@@ -3,6 +3,7 @@ import { one, query } from '../db.js';
 import { ApiError } from '../errors.js';
 import { config } from '../config.js';
 import { getProvider, ProviderError, type DnsRecord } from '../providers/index.js';
+import { dkimDomain } from '../providers/ses.js';
 import { emitEvent } from './webhooks.js';
 
 /** Free mailbox providers: their DMARC policy forbids sending as them from anywhere else. */
@@ -141,6 +142,10 @@ export async function checkDomain(row: any) {
   };
   const records = (row.records as DnsRecord[]).map((r) => ({
     ...r,
+    // Domains created before the regional DKIM fix stored the global target: correct it in place.
+    ...(row.provider === 'ses' && r.purpose === 'dkim'
+      ? { value: r.value.replace(/\.dkim\.(?:[a-z0-9-]+\.)?amazonses\.com$/, `.${dkimDomain()}`) }
+      : {}),
     ...(r.purpose === 'dmarc' && dmarcRec ? { name: dmarcRec.name, value: dmarcRec.value } : {}),
     status: byPurpose[r.purpose] ?? r.status,
   }));
@@ -202,4 +207,31 @@ export async function domainOwnedElsewhere(accountId: string, senderId: string |
     [accountId, senderId, candidates],
   );
   return !!row;
+}
+
+function zoneTxt(value: string) {
+  // TXT strings are limited to 255 characters: long values (e.g. a DKIM key) are split into several quoted parts.
+  const parts = value.match(/.{1,255}/g) ?? [''];
+  return parts.map((p) => `"${p.replace(/(["\\])/g, '\\$1')}"`).join(' ');
+}
+
+/**
+ * BIND zone file with the records a customer still needs, ready for "Import" in Cloudflare
+ * (or any DNS host that accepts zone files). An existing DMARC record is never repeated.
+ */
+export function zoneFile(row: any): string {
+  const records = (row.records as DnsRecord[]).filter((r) => !(r.purpose === 'dmarc' && r.status === 'verified'));
+  const lines = [
+    `;; DNS records for sending email from ${row.name}`,
+    `;; Generated ${new Date().toISOString()}. Import into the DNS zone of ${row.name} (or its parent domain).`,
+    `;; All records must be "DNS only" (not proxied).`,
+  ];
+  for (const r of records) {
+    const name = `${r.name.replace(/\.$/, '')}.`;
+    const tag = ' ; cf_tags=cf-proxied:false';
+    if (r.type === 'CNAME') lines.push(`${name}\t3600\tIN\tCNAME\t${r.value.replace(/\.$/, '')}.${tag}`);
+    else if (r.type === 'MX') lines.push(`${name}\t3600\tIN\tMX\t${r.priority ?? 10} ${r.value.replace(/\.$/, '')}.`);
+    else if (r.type === 'TXT') lines.push(`${name}\t3600\tIN\tTXT\t${zoneTxt(r.value)}`);
+  }
+  return `${lines.join('\n')}\n`;
 }

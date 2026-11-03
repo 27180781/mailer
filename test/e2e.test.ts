@@ -222,3 +222,34 @@ test('reserved domains managed outside the system cannot be claimed or deleted',
   const asAdmin = await api('POST', '/v1/domains', admin.body.token, { name: 'retsef.test' });
   assert.equal(asAdmin.status, 403);
 });
+
+test('DNS zone file download and regional DKIM target', async () => {
+  const { zoneFile } = await import('../src/services/domains.js');
+  const { dkimDomain } = await import('../src/providers/ses.js');
+  assert.equal(dkimDomain('il-central-1'), 'dkim.il-central-1.amazonses.com');
+  assert.equal(dkimDomain('eu-central-1'), 'dkim.amazonses.com');
+
+  const zone = zoneFile({
+    name: 'mail.example.test',
+    records: [
+      { type: 'CNAME', name: 'tok._domainkey.mail.example.test', value: 'tok.dkim.il-central-1.amazonses.com', purpose: 'dkim', status: 'pending' },
+      { type: 'MX', name: 'bounce.mail.example.test', value: 'feedback-smtp.il-central-1.amazonses.com', priority: 10, purpose: 'mail_from_mx', status: 'pending' },
+      { type: 'TXT', name: 'bounce.mail.example.test', value: 'v=spf1 include:amazonses.com ~all', purpose: 'mail_from_spf', status: 'pending' },
+      { type: 'TXT', name: '_dmarc.example.test', value: 'v=DMARC1; p=none;', purpose: 'dmarc', status: 'verified' },
+    ],
+  });
+  assert.match(zone, /^tok\._domainkey\.mail\.example\.test\.\t3600\tIN\tCNAME\ttok\.dkim\.il-central-1\.amazonses\.com\. ; cf_tags=cf-proxied:false$/m);
+  assert.match(zone, /^bounce\.mail\.example\.test\.\t3600\tIN\tMX\t10 feedback-smtp\.il-central-1\.amazonses\.com\.$/m);
+  assert.match(zone, /^bounce\.mail\.example\.test\.\t3600\tIN\tTXT\t"v=spf1 include:amazonses\.com ~all"$/m);
+  assert.doesNotMatch(zone, /_dmarc/); // an existing DMARC record is never repeated
+
+  const long = zoneFile({ name: 'a.test', records: [{ type: 'TXT', name: 'mk1._domainkey.a.test', value: 'v=DKIM1; k=rsa; p=' + 'A'.repeat(400), purpose: 'dkim', status: 'pending' }] });
+  assert.match(long, /IN\tTXT\t"[^"]{255}" "[^"]+"/);
+
+  // API endpoint returns it as a download
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const [d] = (await api('GET', '/v1/domains', u.body.token)).body;
+  const res = await app.inject({ method: 'GET', url: `/v1/domains/${d.id}/zone`, headers: { authorization: `Bearer ${u.body.token}` } });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-disposition']), /attachment; filename="dns-/);
+});

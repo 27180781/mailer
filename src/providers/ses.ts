@@ -28,6 +28,20 @@ function mapStatus(s: string | undefined): CheckStatus {
   return 'pending';
 }
 
+// Regions launched before 2020 use the global DKIM domain; newer ones (e.g. il-central-1) use a regional one.
+const GLOBAL_DKIM_REGIONS = new Set([
+  'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'ca-central-1', 'sa-east-1',
+  'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+  'ap-south-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2',
+  'us-gov-west-1',
+]);
+
+/** Domain that Easy DKIM CNAME records point to, e.g. dkim.il-central-1.amazonses.com. SES_DKIM_DOMAIN overrides. */
+export function dkimDomain(region = config.ses.region): string {
+  if (process.env.SES_DKIM_DOMAIN) return process.env.SES_DKIM_DOMAIN;
+  return GLOBAL_DKIM_REGIONS.has(region) ? 'dkim.amazonses.com' : `dkim.${region}.amazonses.com`;
+}
+
 const SNS_HOST = /^sns\.[a-z0-9-]+\.amazonaws\.com(\.cn)?$/;
 const certCache = new Map<string, string>();
 
@@ -115,7 +129,7 @@ export class SesProvider implements EmailProvider {
         ...tokens.map((t) => ({
           type: 'CNAME' as const,
           name: `${t}._domainkey.${domain}`,
-          value: `${t}.dkim.amazonses.com`,
+          value: `${t}.${dkimDomain()}`,
           purpose: 'dkim' as const,
         })),
         {
