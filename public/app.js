@@ -468,8 +468,9 @@
         <label>מצב<select name="status">${['pending', 'active', 'suspended'].map((s) => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${STATUS[s][0]}</option>`).join('')}</select></label>
         <label>סוג<select name="type"><option value="standard" ${a.type === 'standard' ? 'selected' : ''}>רגיל</option><option value="platform" ${a.type === 'platform' ? 'selected' : ''}>פלטפורמה</option></select></label>
         <label>מכסה יומית<input name="daily_limit" type="number" value="${a.daily_limit}"></label>
+        <label><input type="checkbox" name="can_use_reserved_domains" ${a.can_use_reserved_domains ? 'checked' : ''}> מותר לאמת תת-דומיינים של דומיינים שמורים (למשל mail.retsef.co.il)</label>
         <div class="row"><button class="primary">שמירה</button><button type="button" data-close>ביטול</button></div></form>`);
-      $('#af').onsubmit = async (e) => { e.preventDefault(); const f = formData(e.target); await api('PATCH', `/admin/accounts/${a.id}`, { ...f, daily_limit: Number(f.daily_limit) }); closeModal(); admin(); };
+      $('#af').onsubmit = async (e) => { e.preventDefault(); const f = formData(e.target); await api('PATCH', `/admin/accounts/${a.id}`, { status: f.status, type: f.type, daily_limit: Number(f.daily_limit), can_use_reserved_domains: e.target.can_use_reserved_domains.checked }); closeModal(); admin(); };
     }));
   }
 

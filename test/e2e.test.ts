@@ -11,6 +11,7 @@ process.env.EMAIL_PROVIDER = 'log';
 process.env.SUPER_ADMIN_EMAILS = 'admin@platform.test';
 process.env.PUBLIC_URL = 'https://mail.platform.test';
 process.env.LOG_LEVEL = 'warn';
+process.env.RESERVED_DOMAINS = 'retsef.test';
 
 const { buildServer } = await import('../src/main.js');
 const { migrate, pool, query } = await import('../src/db.js');
@@ -21,6 +22,10 @@ const { getProvider } = await import('../src/providers/index.js');
 
 // Every test domain has a DMARC record, except "nodmarc.test"
 dnsLookup.resolveTxt = (async (name: string) => {
+  if (name.startsWith('_dmarc.') && name.endsWith('retsef.test')) {
+    if (name === '_dmarc.retsef.test') return [['v=DMARC1; p=none;']];
+    throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+  }
   if (name.startsWith('_dmarc.') && !name.includes('nodmarc')) return [['v=DMARC1; p=none']];
   throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
 }) as any;
@@ -191,4 +196,29 @@ test('sender names with Hebrew quotes survive encoding', async () => {
   const from = raw.split('\r\n').find((l) => l.startsWith('From:'))!;
   const decoded = from.replace(/=\?UTF-8\?B\?([^?]+)\?=/gi, (_, b) => Buffer.from(b, 'base64').toString()).replace(/=\?UTF-8\?Q\?([^?]+)\?=/gi, (_, q) => Buffer.from(q.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (_m: string, h: string) => String.fromCharCode(parseInt(h, 16))), 'latin1').toString());
   assert.match(decoded, /בע"מ/);
+});
+
+test('reserved domains managed outside the system cannot be claimed or deleted', async () => {
+  const admin = await api('POST', '/v1/auth/login', undefined, { email: 'admin@platform.test', password: 'very-secret-1' });
+  const u = await api('POST', '/v1/auth/signup', undefined, { email: 'ops@retsef.test', password: 'very-secret-4', name: 'רצף', account_name: 'רצף פלטפורמה' });
+  const accountId = u.body.account.id;
+
+  const root = await api('POST', '/v1/domains', u.body.token, { name: 'retsef.test' });
+  assert.equal(root.status, 403);
+  assert.equal(root.body.error.code, 'reserved_domain');
+
+  const subDenied = await api('POST', '/v1/domains', u.body.token, { name: 'mail.retsef.test' });
+  assert.equal(subDenied.status, 403);
+
+  await api('PATCH', `/admin/accounts/${accountId}`, admin.body.token, { can_use_reserved_domains: true });
+  const sub = await api('POST', '/v1/domains', u.body.token, { name: 'mail.retsef.test' });
+  assert.equal(sub.status, 201);
+  // DMARC found on the root domain: point there, do not ask for a second record
+  const dm = sub.body.records.find((r: any) => r.purpose === 'dmarc');
+  assert.equal(dm.name, '_dmarc.retsef.test');
+  assert.equal(dm.status, 'verified');
+
+  // Even a super admin's own account cannot add the reserved root
+  const asAdmin = await api('POST', '/v1/domains', admin.body.token, { name: 'retsef.test' });
+  assert.equal(asAdmin.status, 403);
 });

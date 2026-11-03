@@ -33,6 +33,9 @@ export const config = {
   maxSendRate: Number(env('MAX_SEND_RATE', '14')),
   newAccountDailyLimit: Number(env('NEW_ACCOUNT_DAILY_LIMIT', '200')),
   apiRateLimitPerMinute: Number(env('API_RATE_LIMIT_PER_MINUTE', '120')),
+  // Domains whose SES identity is managed outside this system (same AWS account), e.g. retsef.co.il.
+  // Nobody may add or delete them here; subdomains only for accounts with can_use_reserved_domains.
+  reservedDomains: (process.env.RESERVED_DOMAINS || '').split(',').map((s) => s.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean),
   // Comma separated emails that become super admins on signup
   superAdmins: (process.env.SUPER_ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 };

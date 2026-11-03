@@ -84,13 +84,22 @@ export class SesProvider implements EmailProvider {
   }
 
   async createDomain(domain: string): Promise<DomainSetup> {
-    const out = await this.client.send(
-      new CreateEmailIdentityCommand({
-        EmailIdentity: domain,
-        DkimSigningAttributes: { NextSigningKeyLength: 'RSA_2048_BIT' },
-        ConfigurationSetName: config.ses.configurationSet,
-      }),
-    );
+    let out;
+    try {
+      out = await this.client.send(
+        new CreateEmailIdentityCommand({
+          EmailIdentity: domain,
+          DkimSigningAttributes: { NextSigningKeyLength: 'RSA_2048_BIT' },
+          ConfigurationSetName: config.ses.configurationSet,
+        }),
+      );
+    } catch (err: any) {
+      // The AWS account is shared: an identity that already exists belongs to another system. Never adopt it.
+      if (err?.name === 'AlreadyExistsException') {
+        throw new ProviderError(`identity ${domain} already exists in the SES account`, false, 'identity_exists');
+      }
+      throw err;
+    }
     const mailFromDomain = `${config.ses.mailFromSubdomain}.${domain}`;
     await this.client.send(
       new PutEmailIdentityMailFromAttributesCommand({

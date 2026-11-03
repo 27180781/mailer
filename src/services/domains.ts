@@ -1,7 +1,8 @@
 import { resolveTxt } from 'node:dns/promises';
 import { one, query } from '../db.js';
 import { ApiError } from '../errors.js';
-import { getProvider, type DnsRecord } from '../providers/index.js';
+import { config } from '../config.js';
+import { getProvider, ProviderError, type DnsRecord } from '../providers/index.js';
 import { emitEvent } from './webhooks.js';
 
 /** Free mailbox providers: their DMARC policy forbids sending as them from anywhere else. */
@@ -33,13 +34,23 @@ async function txt(name: string): Promise<string[]> {
 }
 
 /** Looks for a DMARC record on the domain or one of its parents (organizational domain). */
-export async function findDmarc(domain: string): Promise<string | null> {
+export async function findDmarcRecord(domain: string): Promise<{ name: string; value: string } | null> {
   const labels = domain.split('.');
   for (let i = 0; i <= labels.length - 2; i++) {
-    const rec = (await txt(`_dmarc.${labels.slice(i).join('.')}`)).find((t) => /^v=DMARC1/i.test(t.trim()));
-    if (rec) return rec;
+    const name = `_dmarc.${labels.slice(i).join('.')}`;
+    const rec = (await txt(name)).find((t) => /^v=DMARC1/i.test(t.trim()));
+    if (rec) return { name, value: rec };
   }
   return null;
+}
+
+export async function findDmarc(domain: string): Promise<string | null> {
+  return (await findDmarcRecord(domain))?.value ?? null;
+}
+
+/** The reserved domain this name equals or falls under, if any. */
+export function reservedParent(name: string): string | null {
+  return config.reservedDomains.find((r) => name === r || name.endsWith(`.${r}`)) ?? null;
 }
 
 function publicDomain(row: any) {
@@ -63,24 +74,41 @@ export async function addDomain(accountId: string, senderId: string | null, rawN
   const name = rawName.trim().toLowerCase().replace(/\.$/, '');
   if (!DOMAIN_RE.test(name)) throw new ApiError(400, 'invalid_domain', 'שם הדומיין לא תקין');
   if (FREEMAIL_DOMAINS.has(name)) throw new ApiError(400, 'freemail_domain', 'אי אפשר לאמת דומיין של ספק דואר חינמי. צריך דומיין בבעלותך');
+  const reserved = reservedParent(name);
+  if (reserved === name) {
+    throw new ApiError(403, 'reserved_domain', 'הדומיין הזה מנוהל מחוץ למערכת ואי אפשר להוסיף אותו כאן');
+  }
+  if (reserved) {
+    const acc = await one<{ can_use_reserved_domains: boolean }>('SELECT can_use_reserved_domains FROM accounts WHERE id = $1', [accountId]);
+    if (!acc?.can_use_reserved_domains) throw new ApiError(403, 'reserved_domain', `אין הרשאה להוסיף תת-דומיין של ${reserved}`);
+  }
   const existing = await one('SELECT account_id FROM domains WHERE name = $1', [name]);
   if (existing) throw new ApiError(409, 'domain_taken', 'הדומיין כבר רשום במערכת');
 
   const provider = getProvider();
-  const setup = await provider.createDomain(name);
-  const dmarc = await findDmarc(name);
+  let setup;
+  try {
+    setup = await provider.createDomain(name);
+  } catch (err) {
+    if (err instanceof ProviderError && err.code === 'identity_exists') {
+      throw new ApiError(409, 'domain_exists_in_provider', 'הדומיין כבר מוגדר בחשבון ה-AWS על ידי מערכת אחרת, ולכן אי אפשר להוסיף אותו כאן');
+    }
+    throw err;
+  }
+  const dmarc = await findDmarcRecord(name);
   const records: DnsRecord[] = setup.records.map((r) => ({ ...r, status: 'pending' }));
+  // An existing record on a parent domain already covers this one: show where it is, and never suggest a second record.
   records.push({
     type: 'TXT',
-    name: `_dmarc.${name}`,
-    value: dmarc ?? SUGGESTED_DMARC,
+    name: dmarc?.name ?? `_dmarc.${name}`,
+    value: dmarc?.value ?? SUGGESTED_DMARC,
     purpose: 'dmarc',
     status: dmarc ? 'verified' : 'pending',
   });
   const row = await one(
     `INSERT INTO domains (account_id, sender_id, name, provider, provider_data, mail_from_domain, records, dmarc_status, dmarc_record)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [accountId, senderId, name, provider.name, JSON.stringify(setup.providerData ?? {}), setup.mailFromDomain, JSON.stringify(records), dmarc ? 'verified' : 'pending', dmarc],
+    [accountId, senderId, name, provider.name, JSON.stringify(setup.providerData ?? {}), setup.mailFromDomain, JSON.stringify(records), dmarc ? 'verified' : 'pending', dmarc?.value ?? null],
   );
   return checkDomain(row);
 }
@@ -94,7 +122,8 @@ export async function checkDomain(row: any) {
   } catch (err) {
     console.error(`domain check failed for ${row.name}`, err);
   }
-  const dmarc = await findDmarc(row.name);
+  const dmarcRec = await findDmarcRecord(row.name);
+  const dmarc = dmarcRec?.value ?? null;
   const dmarcStatus = dmarc ? 'verified' : 'pending';
   const all = status.dkim === 'verified' && status.mailFrom === 'verified' && dmarcStatus === 'verified';
 
@@ -112,7 +141,7 @@ export async function checkDomain(row: any) {
   };
   const records = (row.records as DnsRecord[]).map((r) => ({
     ...r,
-    ...(r.purpose === 'dmarc' && dmarc ? { value: dmarc } : {}),
+    ...(r.purpose === 'dmarc' && dmarcRec ? { name: dmarcRec.name, value: dmarcRec.value } : {}),
     status: byPurpose[r.purpose] ?? r.status,
   }));
 
@@ -130,7 +159,10 @@ export async function checkDomain(row: any) {
 }
 
 export async function deleteDomain(row: any) {
-  await getProvider(row.provider).deleteDomain(row.name, row.provider_data ?? {});
+  // Never delete a provider identity that this system does not own (shared AWS account).
+  if (reservedParent(row.name) !== row.name && !row.provider_data?.external) {
+    await getProvider(row.provider).deleteDomain(row.name, row.provider_data ?? {});
+  }
   await query('DELETE FROM domains WHERE id = $1', [row.id]);
 }
 

@@ -633,12 +633,14 @@ export async function apiRoutes(app: FastifyInstance) {
           type: z.enum(['standard', 'platform']).optional(),
           daily_limit: z.number().int().min(0).max(10_000_000).optional(),
           monthly_limit: z.number().int().min(0).nullish(),
+          can_use_reserved_domains: z.boolean().optional(),
         })
         .parse(req.body);
       const row = await one(
         `UPDATE accounts SET status = coalesce($2, status), type = coalesce($3, type), daily_limit = coalesce($4, daily_limit),
-           monthly_limit = CASE WHEN $5::boolean THEN $6 ELSE monthly_limit END WHERE id = $1 RETURNING *`,
-        [id, b.status ?? null, b.type ?? null, b.daily_limit ?? null, b.monthly_limit !== undefined, b.monthly_limit ?? null],
+           monthly_limit = CASE WHEN $5::boolean THEN $6 ELSE monthly_limit END,
+           can_use_reserved_domains = coalesce($7, can_use_reserved_domains) WHERE id = $1 RETURNING *`,
+        [id, b.status ?? null, b.type ?? null, b.daily_limit ?? null, b.monthly_limit !== undefined, b.monthly_limit ?? null, b.can_use_reserved_domains ?? null],
       );
       if (!row) throw notFound('החשבון');
       return row;

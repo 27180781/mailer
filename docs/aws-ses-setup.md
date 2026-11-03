@@ -15,6 +15,32 @@
 
 לא נוצרים משאבים ל-SES בשם של רצף, ולא משתנים ה-role, ה-SSM, הגיבויים או ה-security group של רצף.
 
+## מה רצף כבר הקים באותו חשבון (עדכון 3.11.2026)
+
+- Stack בשם `retzef-ses`: identity מאומת ל-`retsef.co.il`, עם Easy DKIM ו-configuration set בשם `retzef-transactional`. שרת רצף שולח ממנו את המיילים התפעוליים שלו ישירות, דרך ה-role שלו.
+- ב-Cloudflare: 3 רשומות DKIM, ורשומת `_dmarc.retsef.co.il` עם הערך `v=DMARC1; p=none;`.
+- בקשת production access ל-SES ב-il-central-1 כבר הוגשה. האישור חל על כל החשבון, ולכן הוא מכסה גם את מערכת הדיוור.
+
+מה זה אומר למערכת הדיוור:
+- ה-identity של `retsef.co.il` שייך לרצף. המערכת מגדירה אותו כדומיין שמור (`RESERVED_DOMAINS=retsef.co.il`): אף חשבון לא יכול להוסיף אותו או למחוק אותו, וגם אם מישהו ינסה דרך ה-API, המערכת לא תיגע ב-identity שלו ב-SES. תת-דומיין שלו אפשר לאמת רק בחשבון שמנהל-העל סימן לו "מותר לאמת תת-דומיינים של דומיינים שמורים".
+- אם בכל זאת מנסים להוסיף דומיין שכבר קיים כ-identity בחשבון, המערכת מסרבת. היא לא משתלטת עליו.
+- המערכת שולחת רק עם `mailer-events`, ולא עם `retzef-transactional`.
+- רשומת ה-DMARC של `retsef.co.il` חלה גם על התת-דומיינים, ולכן לא מוסיפים עוד רשומה. המערכת מציגה את הרשומה הקיימת כתקינה.
+- מכסת השליחה של SES משותפת לרצף ולמערכת הדיוור. את `MAX_SEND_RATE` מגדירים מתחת למכסה, כך שיישאר מקום לרצף. למשל, אם המכסה היא 14 בשנייה, קובעים 10.
+
+### דומיין השליחה של מערכת הדיוור: `mail.retsef.co.il`
+
+כדי שהמוניטין של הדיוורים יהיה נפרד מזה של המיילים התפעוליים של רצף, מאמתים את `mail.retsef.co.il` כ-identity נפרד, דרך המערכת עצמה:
+1. במערכת הדיוור, במסך ניהול החשבונות, מסמנים לחשבון את ההרשאה לתת-דומיינים שמורים.
+2. בחשבון הזה, במסך דומיינים, מוסיפים את `mail.retsef.co.il`. המערכת יוצרת את ה-identity ב-SES ומציגה את הרשומות.
+3. ב-Cloudflare מוסיפים את הרשומות, כולן במצב DNS only:
+   - 3 רשומות CNAME של DKIM, בשמות `*._domainkey.mail.retsef.co.il`.
+   - MX לתת-הדומיין `bounce.mail.retsef.co.il`, עם הערך `feedback-smtp.il-central-1.amazonses.com` ועדיפות 10.
+   - TXT ל-`bounce.mail.retsef.co.il`, עם הערך `v=spf1 include:amazonses.com ~all`.
+   - לא מוסיפים רשומת `_dmarc`.
+
+רשומת ה-A של `mail.retsef.co.il` (לשרת ה-CapRover) לא מתנגשת עם הרשומות האלה.
+
 ## Policy למשתמש `mailer-ses`
 
 ```json
@@ -35,10 +61,24 @@
       ],
       "Resource": "*",
       "Condition": { "StringEquals": { "aws:RequestedRegion": "il-central-1" } }
+    },
+    {
+      "Sid": "NeverTouchRetzefIdentity",
+      "Effect": "Deny",
+      "Action": [
+        "ses:CreateEmailIdentity",
+        "ses:DeleteEmailIdentity",
+        "ses:PutEmailIdentityMailFromAttributes",
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "Resource": "arn:aws:ses:il-central-1:010569743794:identity/retsef.co.il"
     }
   ]
 }
 ```
+
+ה-Resource של ההרשאה הראשונה הוא `*`, כי כל לקוח של המערכת מאמת דומיין משלו, ואי אפשר לדעת מראש מה הדומיינים. ההרשאה השנייה חוסמת ברמת AWS כל שינוי או שליחה דרך ה-identity של רצף, גם אם תהיה תקלה בקוד.
 
 ## משתני סביבה באפליקציה ב-CapRover
 
@@ -51,13 +91,18 @@ EMAIL_PROVIDER=ses
 SES_REGION=il-central-1
 SES_CONFIGURATION_SET=mailer-events
 SES_SNS_TOPIC_ARN=arn:aws:sns:il-central-1:010569743794:mailer-ses-events
+RESERVED_DOMAINS=retsef.co.il
+MAX_SEND_RATE=1
 AWS_ACCESS_KEY_ID=<מהמשתמש mailer-ses>
 AWS_SECRET_ACCESS_KEY=<מהמשתמש mailer-ses>
 ```
 
 ## יציאה מ-sandbox
 
-החשבון מוגבל כרגע ל-200 מיילים ביממה ולמייל אחד בשנייה. בקונסול של SES ב-il-central-1 נכנסים ל-Account dashboard → Request production access. נוסח מוצע:
+**רצף כבר הגיש את הבקשה, והיא חלה על כל החשבון. אין צורך להגיש שוב.**
+עד האישור החשבון מוגבל ל-200 מיילים ביממה ולמייל אחד בשנייה, ואפשר לשלוח רק לכתובות מאומתות (למשל na73438@gmail.com). לכן בינתיים `MAX_SEND_RATE=1`. אחרי האישור מעלים לפי המכסה שאמזון נותנת, ומשאירים מקום לרצף.
+
+אם אמזון יבקשו פרטים נוספים על מערכת הדיוור, זה הנוסח:
 
 - Mail type: Transactional (גם מיילים שיווקיים מבוססי הסכמה נשלחים, ומסומנים בנפרד)
 - Website URL: https://mail.retsef.co.il
