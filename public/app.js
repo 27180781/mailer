@@ -10,7 +10,7 @@
   async function api(method, path, body) {
     const res = await fetch(path, {
       method,
-      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = res.status === 204 ? null : await res.json().catch(() => null);
@@ -159,8 +159,15 @@
         <div class="row"><button class="primary" id="verify">בדיקה עכשיו</button><button class="danger" id="del">מחיקה</button></div></div>
         <p>${d.status === 'verified' ? 'הדומיין מאומת ואפשר לשלוח ממנו מכל כתובת.' : 'כדי לאמת, צריך להוסיף את הרשומות הבאות ב-DNS של הדומיין:'}</p>
         ${recordsTable(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
-      $('#verify').onclick = async () => { await api('POST', `/v1/domains/${id}/verify`); toast('נבדק'); domains(id); };
-      $('#del').onclick = async () => { if (confirm('למחוק את הדומיין? לא יהיה אפשר לשלוח ממנו.')) { await api('DELETE', `/v1/domains/${id}`); location.hash = '#/domains'; } };
+      $('#verify').onclick = async (e) => {
+        const b = e.currentTarget; b.disabled = true; b.textContent = 'בודק…';
+        try { const r = await api('POST', `/v1/domains/${id}/verify`); toast(r.status === 'verified' ? 'הדומיין מאומת' : 'נבדק. חלק מהרשומות עדיין לא נמצאו'); domains(id); }
+        catch (err) { toast(err.message); b.disabled = false; b.textContent = 'בדיקה עכשיו'; }
+      };
+      $('#del').onclick = async () => {
+        if (!confirm('למחוק את הדומיין? לא יהיה אפשר לשלוח ממנו.')) return;
+        try { await api('DELETE', `/v1/domains/${id}`); location.hash = '#/domains'; } catch (err) { toast(err.message); }
+      };
       return;
     }
     const list = await api('GET', '/v1/domains');

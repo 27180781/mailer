@@ -273,3 +273,12 @@ test('system-wide daily cap holds mail in the queue instead of sending', async (
     config.dailySendCap = 0;
   }
 });
+
+test('POST with an empty JSON body is accepted (verify button)', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const [d] = (await api('GET', '/v1/domains', u.body.token)).body;
+  const res = await app.inject({ method: 'POST', url: `/v1/domains/${d.id}/verify`, headers: { authorization: `Bearer ${u.body.token}`, 'content-type': 'application/json' }, payload: '' });
+  assert.equal(res.statusCode, 200);
+  const bad = await app.inject({ method: 'POST', url: '/v1/auth/login', headers: { 'content-type': 'application/json' }, payload: '{nope' });
+  assert.equal(bad.statusCode, 400);
+});

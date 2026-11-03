@@ -14,6 +14,17 @@ import { startWorker, stopWorker } from './worker.js';
 export async function buildServer() {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 20 * 1024 * 1024, trustProxy: true });
 
+  // An empty body marked as JSON (e.g. POST /verify with no payload) is treated as no body, not an error.
+  app.removeContentTypeParser('application/json');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    const text = String(body ?? '').trim();
+    if (!text) return done(null, undefined);
+    try {
+      done(null, JSON.parse(text));
+    } catch {
+      done(Object.assign(new Error('גוף הבקשה אינו JSON תקין'), { statusCode: 400, code: 'invalid_json' }), undefined);
+    }
+  });
   // SNS posts JSON with content-type text/plain
   app.addContentTypeParser('text/plain', { parseAs: 'string' }, (_req, body, done) => done(null, body));
   await app.register(formbody);
