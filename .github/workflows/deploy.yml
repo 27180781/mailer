@@ -35,6 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The CapRover action uploads ./deploy.tar: the committed source, with captain-definition at its root
+      - name: Package source for CapRover
+        run: git archive --format=tar -o deploy.tar HEAD && tar -tf deploy.tar | grep -x captain-definition
       - uses: caprover/deploy-from-github@v1.1.2
         with:
           server: ${{ secrets.CAPROVER_SERVER }}
