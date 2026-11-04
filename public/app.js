@@ -19,9 +19,41 @@
     return data;
   }
 
-  function toast(msg) {
+  // Stroke icons (24x24), inline SVG
+  const ICONS = {
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+    send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+    template: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+    inbox: '<path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5.5 5h13L21 13v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    building: '<rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1M10 21v-3h4v3"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+    zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
+    chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    logout: '<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l-5-5 5-5M5 12h11"/>',
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    upload: '<path d="M12 15V3M7 8l5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/>',
+    download: '<path d="M12 3v12M7 10l5 5 5-5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/>',
+    check: '<path d="m5 12 5 5L20 7"/>',
+    alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    pointer: '<path d="m4 4 7 16 2.5-6.5L20 11z"/>',
+    bounce: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  };
+  const icon = (name, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+  document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon, el.classList.contains('brand-mark') ? 20 : 18); el.style.color = el.classList.contains('brand-mark') ? '#fff' : ''; });
+  const empty = (ic, title, text, action = '') => `<div class="empty"><div class="ico">${icon(ic, 26)}</div><b>${title}</b><p>${text}</p>${action}</div>`;
+
+  function toast(msg, kind = 'ok') {
     const t = $('#toast');
-    t.textContent = msg;
+    t.innerHTML = `${icon(kind === 'error' ? 'alert' : 'check', 18)}<span></span>`;
+    t.querySelector('span').textContent = msg;
     t.classList.remove('hidden');
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => t.classList.add('hidden'), 3000);
@@ -58,6 +90,9 @@
       document.querySelectorAll('[data-auth-tab]').forEach((x) => x.classList.toggle('active', x === b));
       $('#login-form').classList.toggle('hidden', b.dataset.authTab !== 'login');
       $('#signup-form').classList.toggle('hidden', b.dataset.authTab !== 'signup');
+      const signup = b.dataset.authTab === 'signup';
+      $('#auth-title').textContent = signup ? 'פותחים חשבון' : 'ברוך שובך';
+      $('#auth-sub').textContent = signup ? 'כמה פרטים, ואפשר להתחיל לשלוח' : 'התחברות לחשבון הדיוור שלך';
     }),
   );
   const formData = (f) => Object.fromEntries(new FormData(f).entries());
@@ -84,33 +119,54 @@
 
   // ---------- Routing ----------
   const routes = {
-    dashboard: ['לוח בקרה', dashboard],
-    domains: ['דומיינים', domains],
-    senders: ['שולחים', senders, () => me.account.type === 'platform'],
-    emails: ['מיילים שנשלחו', emails],
-    contacts: ['אנשי קשר', contacts],
-    lists: ['רשימות', lists],
-    campaigns: ['דיוורים', campaigns],
-    templates: ['תבניות', templates],
-    keys: ['מפתחות API', keys],
-    webhooks: ['Webhooks', webhooks],
-    settings: ['הגדרות חשבון', settings],
-    admin: ['ניהול חשבונות', admin, () => me.user?.is_superadmin],
+    dashboard: ['לוח בקרה', dashboard, null, 'home', 'ראשי'],
+    campaigns: ['דיוורים', campaigns, null, 'send', 'ראשי'],
+    templates: ['תבניות', templates, null, 'template', 'ראשי'],
+    contacts: ['אנשי קשר', contacts, null, 'users', 'קהל'],
+    lists: ['רשימות', lists, null, 'list', 'קהל'],
+    emails: ['מיילים שנשלחו', emails, null, 'inbox', 'קהל'],
+    domains: ['דומיינים', domains, null, 'globe', 'שליחה'],
+    senders: ['שולחים', senders, () => me.account.type === 'platform', 'building', 'שליחה'],
+    keys: ['מפתחות API', keys, null, 'key', 'פיתוח'],
+    webhooks: ['Webhooks', webhooks, null, 'zap', 'פיתוח'],
+    settings: ['הגדרות חשבון', settings, null, 'settings', 'חשבון'],
+    admin: ['ניהול חשבונות', admin, () => me.user?.is_superadmin, 'shield', 'חשבון'],
   };
   function renderNav(current) {
+    let group = '';
     $('#nav').innerHTML = Object.entries(routes)
       .filter(([, r]) => !r[2] || r[2]())
-      .map(([k, r]) => `<a href="#/${k}" class="${k === current ? 'active' : ''}">${esc(r[0])}</a>`)
+      .map(([k, r]) => {
+        const head = r[4] !== group ? `<div class="nav-group">${(group = r[4])}</div>` : '';
+        return `${head}<a href="#/${k}" class="${k === current ? 'active' : ''}">${icon(r[3])}<span>${esc(r[0])}</span></a>`;
+      })
       .join('');
+    $('#topbar-title').textContent = routes[current]?.[0] || '';
+    $('#shell').classList.remove('menu-open');
   }
+  $('#menu').addEventListener('click', () => $('#shell').classList.toggle('menu-open'));
+  $('#shell').addEventListener('click', (e) => { if (e.target.id === 'shell') $('#shell').classList.remove('menu-open'); });
   async function route() {
     const [name, ...rest] = (location.hash.replace(/^#\//, '').split('?')[0] || 'dashboard').split('/');
     const r = routes[name] || routes.dashboard;
     renderNav(routes[name] ? name : 'dashboard');
-    $('#view').innerHTML = '<p class="muted">טוען…</p>';
-    try { await r[1](...rest); } catch (err) { $('#view').innerHTML = `<p class="error">${esc(err.message)}</p>`; }
+    $('#view').innerHTML = '<div class="loading"><div class="spinner"></div>טוען…</div>';
+    window.scrollTo(0, 0);
+    try { await r[1](...rest); } catch (err) { $('#view').innerHTML = empty('alert', 'משהו השתבש', esc(err.message)); return; }
+    // A table with only its header row becomes a friendly empty state
+    const E = EMPTY[name];
+    if (E && !rest.length) $('#view').querySelectorAll('.table-wrap').forEach((w) => { if (w.querySelectorAll('tr').length <= 1) w.outerHTML = empty(...E); });
   }
   window.addEventListener('hashchange', route);
+  const EMPTY = {
+    campaigns: ['send', 'עוד אין דיוורים', 'בוחרים תבנית, רשימת יעד ושולחים. אפשר לשלוח בדיקה לפני.', '<a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a>'],
+    emails: ['inbox', 'עוד לא נשלחו מיילים בודדים', 'מיילים שנשלחים דרך ה-API, כמו חשבוניות ואישורים, יופיעו כאן עם מצב המסירה שלהם.'],
+    contacts: ['users', 'עוד אין אנשי קשר', 'מייבאים קובץ CSV, מוסיפים דרך ה-API או מחברים טופס הרשמה לרשימה.'],
+    lists: ['list', 'עוד אין רשימות', 'יוצרים רשימה למעלה, ומייבאים אליה אנשי קשר.'],
+    keys: ['key', 'עוד אין מפתחות API', 'יוצרים מפתח כדי לשלוח מיילים ולנהל את החשבון מהמערכות שלך.'],
+    webhooks: ['zap', 'עוד אין Webhooks', 'מוסיפים כתובת, והמערכת תודיע לה על מסירה, חזרות, תלונות והסרות.'],
+    senders: ['building', 'עוד אין שולחים', 'כל שולח הוא לקוח שלך עם דומיין משלו.'],
+  };
 
   async function boot() {
     if (!token) { $('#auth').classList.remove('hidden'); return; }
@@ -118,27 +174,87 @@
     $('#auth').classList.add('hidden');
     $('#shell').classList.remove('hidden');
     $('#brand').textContent = me.account.name;
+    $('#brand-sub').textContent = me.account.type === 'platform' ? 'חשבון פלטפורמה' : 'חשבון דיוור';
     $('#who').textContent = me.user?.email || '';
+    $('#who-name').textContent = me.user?.name || me.account.name;
+    $('#avatar').textContent = (me.user?.name || me.account.name || '?').trim().charAt(0);
     $('#banner').innerHTML = me.account.status === 'pending'
-      ? `<div class="banner">החשבון ממתין לאישור. עד האישור אפשר לשלוח עד ${me.account.daily_limit} מיילים ביום, ודיוורים לרשימות לא זמינים.</div>`
-      : me.account.status === 'suspended' ? `<div class="banner">החשבון מושעה. לבירור פנו לתמיכה.</div>` : '';
+      ? `<div class="banner">${icon('alert')}<span>החשבון ממתין לאישור. עד האישור אפשר לשלוח עד ${me.account.daily_limit} מיילים ביום, ודיוורים לרשימות לא זמינים.</span></div>`
+      : me.account.status === 'suspended' ? `<div class="banner">${icon('alert')}<span>החשבון מושעה. לבירור פנו לתמיכה.</span></div>` : '';
     route();
   }
 
   // ---------- Views ----------
+  /** Bar chart (sent per day, problems stacked in red) with an opens line. Plain SVG. */
+  function chartSvg(daily) {
+    const W = 720, H = 220, padL = 8, padR = 36, padT = 10, padB = 26;
+    const max = Math.max(4, ...daily.map((d) => d.sent));
+    const step = Math.pow(10, Math.floor(Math.log10(max)));
+    const top = Math.ceil(max / step) * step;
+    const iw = W - padL - padR, ih = H - padT - padB, bw = iw / daily.length;
+    const y = (v) => padT + ih - (v / top) * ih;
+    const ticks = [0, top / 2, top];
+    const grid = ticks.map((t) => `<line class="grid-line" x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}"/><text x="${W - padR + 6}" y="${y(t) + 4}">${Math.round(t).toLocaleString('he-IL')}</text>`).join('');
+    const bars = daily.map((d, i) => {
+      const x = padL + i * bw + bw * 0.18, w = bw * 0.64;
+      const ok = Math.max(0, d.sent - d.problems);
+      return `<g><title>${d.day.slice(8, 10)}/${d.day.slice(5, 7)}: נשלחו ${d.sent}, נפתחו ${d.opened}, בעיות ${d.problems}</title>
+        <rect class="bar-sent" x="${x}" y="${y(ok)}" width="${w}" height="${ih + padT - y(ok)}" rx="3"/>
+        ${d.problems ? `<rect class="bar-problem" x="${x}" y="${y(d.sent)}" width="${w}" height="${y(ok) - y(d.sent)}" rx="2"/>` : ''}</g>`;
+    }).join('');
+    const pts = daily.map((d, i) => [padL + i * bw + bw / 2, y(d.opened)]);
+    const line = `<path class="line-open" d="${pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('')}"/>${pts.map((p) => `<circle class="dot-open" cx="${p[0]}" cy="${p[1]}" r="3"/>`).join('')}`;
+    const labels = daily.map((d, i) => (i % 2 === daily.length % 2 ? '' : `<text x="${padL + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${Number(d.day.slice(8, 10))}/${Number(d.day.slice(5, 7))}</text>`)).join('');
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="מיילים שנשלחו ונפתחו ב-14 הימים האחרונים">${grid}${bars}${line}${labels}</svg>`;
+  }
+
   async function dashboard() {
     me = await api('GET', '/v1/me');
-    const [doms, camps] = await Promise.all([api('GET', '/v1/domains'), api('GET', '/v1/campaigns?limit=5')]);
-    const verified = doms.filter((d) => d.status === 'verified').length;
-    $('#view').innerHTML = `<h1>לוח בקרה</h1>
+    const [stats, camps, keysList] = await Promise.all([api('GET', '/v1/stats?days=14'), api('GET', '/v1/campaigns?limit=5'), api('GET', '/v1/api-keys')]);
+    const t = stats.totals, c = stats.counts;
+    const pct = (a, b) => (b ? `${Math.round((a / b) * 1000) / 10}%` : '—');
+    const used = me.usage.daily_limit ? Math.min(100, (me.usage.today / me.usage.daily_limit) * 100) : 0;
+    const hour = new Date().getHours();
+    const hello = hour < 12 ? 'בוקר טוב' : hour < 17 ? 'צהריים טובים' : hour < 21 ? 'ערב טוב' : 'לילה טוב';
+    const steps = [
+      [c.verified_domains > 0, 'לאמת דומיין שליחה', 'כדי שהמיילים יגיעו לתיבה ולא לספאם', '#/domains'],
+      [c.contacts > 0, 'לייבא אנשי קשר', 'מקובץ CSV או דרך ה-API', '#/contacts'],
+      [c.lists > 0, 'ליצור רשימת תפוצה', 'אליה שולחים את הדיוורים', '#/lists'],
+      [camps.some((x) => x.status === 'sent' || x.status === 'sending'), 'לשלוח דיוור ראשון', 'עם תבנית מוכנה ותצוגה מקדימה', '#/campaigns/new'],
+      [keysList.length > 0, 'לחבר מערכת דרך ה-API', 'אופציונלי: מפתח API ושליחה מהקוד', '#/keys'],
+    ];
+    const done = steps.filter((x) => x[0]).length;
+    $('#view').innerHTML = `
+      <div class="page-head"><div><h1>${hello}${me.user?.name ? `, ${esc(me.user.name.split(' ')[0])}` : ''}</h1><p>מה קורה עם המיילים של ${esc(me.account.name)} ב-14 הימים האחרונים</p></div>
+        <div class="actions"><a href="#/campaigns/new"><button class="primary">${icon('plus')}דיוור חדש</button></a></div></div>
       <div class="grid">
-        <div class="card stat"><div class="n">${me.usage.today.toLocaleString('he-IL')}</div><div class="l">מיילים היום, מתוך ${me.usage.daily_limit.toLocaleString('he-IL')}</div></div>
-        <div class="card stat"><div class="n">${verified} / ${doms.length}</div><div class="l">דומיינים מאומתים</div></div>
-        <div class="card stat"><div class="n">${badge(me.account.status)}</div><div class="l">מצב החשבון</div></div>
+        <div class="card stat"><div class="ico">${icon('send', 20)}</div><div class="n">${t.sent.toLocaleString('he-IL')}</div><div class="l">מיילים נשלחו</div></div>
+        <div class="card stat"><div class="ico good">${icon('check', 20)}</div><div class="n">${pct(t.delivered, t.sent)}</div><div class="l">נמסרו בהצלחה</div></div>
+        <div class="card stat"><div class="ico info">${icon('eye', 20)}</div><div class="n">${pct(t.opened, t.sent)}</div><div class="l">נפתחו · ${pct(t.clicked, t.sent)} הקליקו</div></div>
+        <div class="card stat"><div class="ico warn">${icon('bounce', 20)}</div><div class="n">${pct(t.problems, t.sent)}</div><div class="l">חזרות, תלונות ושגיאות</div></div>
       </div>
-      ${doms.length === 0 ? `<div class="card" style="margin-top:16px"><b>הצעד הראשון: לאמת דומיין.</b> <p class="muted">אי אפשר לשלוח לפני שהדומיין שממנו שולחים מאומת. זה מה שמונע מהמיילים להגיע לספאם.</p><a href="#/domains">להוספת דומיין</a></div>` : ''}
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card chart-card">
+          <div class="row between"><h3>פעילות יומית</h3><div class="legend"><span><i style="background:var(--brand)"></i>נשלחו</span><span><i style="background:var(--accent)"></i>נפתחו</span><span><i style="background:var(--bad)"></i>בעיות</span></div></div>
+          ${t.sent ? chartSvg(stats.daily) : `<div class="empty" style="margin-top:12px;border-style:dashed">${''}<b>עוד אין נתונים</b><p>הגרף יתמלא אחרי הדיוור הראשון.</p></div>`}
+        </div>
+        <div class="card">
+          <h3 style="margin:0 0 4px;font-size:16px">מכסה יומית</h3>
+          <div class="stat" style="box-shadow:none"><div class="n">${me.usage.today.toLocaleString('he-IL')} <small style="font-size:15px;font-weight:500">/ ${me.usage.daily_limit.toLocaleString('he-IL')}</small></div></div>
+          <div class="meter"><i style="width:${used}%"></i></div>
+          <p class="muted" style="margin:10px 0 0;font-size:13px">מתאפס כל יום בחצות. ${me.account.status === 'pending' ? 'אחרי אישור החשבון המכסה עולה.' : ''}</p>
+          <div style="display:flex;gap:16px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line-2)">
+            <div><div style="font-size:20px;font-weight:800">${c.contacts.toLocaleString('he-IL')}</div><small>אנשי קשר פעילים</small></div>
+            <div><div style="font-size:20px;font-weight:800">${c.verified_domains}/${c.domains}</div><small>דומיינים מאומתים</small></div>
+          </div>
+        </div>
+      </div>
+      ${done < steps.length ? `<div class="card" style="margin-top:16px"><div class="row between"><h3 style="margin:0;font-size:16px">צעדים ראשונים</h3><small>${done} מתוך ${steps.length}</small></div>
+        <div class="meter" style="margin:10px 0 16px"><i style="width:${(done / steps.length) * 100}%"></i></div>
+        <div class="steps">${steps.map((x, i) => `<a class="step ${x[0] ? 'done' : ''}" href="${x[3]}" style="color:inherit;text-decoration:none"><span class="num">${x[0] ? icon('check', 14) : i + 1}</span><div><b>${x[1]}</b><small class="muted">${x[2]}</small></div></a>`).join('')}</div></div>` : ''}
       <h2>דיוורים אחרונים</h2>
-      ${camps.length ? `<div class="table-wrap"><table><tr><th>שם</th><th>מצב</th><th>נוצר</th></tr>${camps.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>` : '<p class="muted">עוד אין דיוורים.</p>'}`;
+      ${camps.length ? `<div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>מצב</th><th>נוצר</th></tr>${camps.map((x) => `<tr><td><a href="#/campaigns/${x.id}">${esc(x.name)}</a></td><td>${esc(x.subject)}</td><td>${badge(x.status)}</td><td>${fmtDate(x.created_at)}</td></tr>`).join('')}</table></div>`
+        : empty('send', 'עוד אין דיוורים', 'יוצרים דיוור מתבנית מוכנה, בוחרים רשימה ושולחים.', '<a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a>')}`;
   }
 
   const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC' };
@@ -176,7 +292,7 @@
       <h2>הדומיינים שלך</h2>
       ${list.length ? `<div class="table-wrap"><table><tr><th>דומיין</th><th>מצב</th><th>DKIM</th><th>MAIL FROM</th><th>DMARC</th></tr>
       ${list.filter((d) => !d.sender_id).map((d) => `<tr><td class="ltr"><a href="#/domains/${d.id}">${esc(d.name)}</a></td><td>${badge(d.status)}</td><td>${badge(d.checks.dkim)}</td><td>${badge(d.checks.mail_from)}</td><td>${badge(d.checks.dmarc)}</td></tr>`).join('')}
-      </table></div>` : '<p class="muted">עוד לא נוספו דומיינים.</p>'}`;
+      </table></div>` : empty('globe', 'עוד אין דומיינים', 'מוסיפים את הדומיין שממנו שולחים, מורידים קובץ DNS ומייבאים אותו. המערכת מאמתת לבד.')}`;
     $('#add').onsubmit = async (e) => {
       e.preventDefault();
       try { const d = await api('POST', '/v1/domains', formData(e.target)); location.hash = `#/domains/${d.id}`; } catch (err) { toast(err.message); }
@@ -220,7 +336,7 @@
   async function contacts() {
     const q = new URLSearchParams(location.hash.split('?')[1] || '');
     const [data, ls] = await Promise.all([api('GET', `/v1/contacts?limit=100&search=${encodeURIComponent(q.get('s') || '')}`), api('GET', '/v1/lists')]);
-    $('#view').innerHTML = `<div class="row between"><h1>אנשי קשר <small>(${data.total.toLocaleString('he-IL')})</small></h1><button class="primary" id="imp">ייבוא מקובץ</button></div>
+    $('#view').innerHTML = `<div class="page-head"><h1>אנשי קשר <small>(${data.total.toLocaleString('he-IL')})</small></h1><button class="primary" id="imp">ייבוא מקובץ</button></div>
       <form id="search" class="row"><input name="s" value="${esc(q.get('s') || '')}" placeholder="חיפוש לפי מייל או שם" style="flex:1"><button>חיפוש</button></form>
       <div class="table-wrap" style="margin-top:12px"><table><tr><th>מייל</th><th>שם</th><th>מצב</th><th>מקור ההסכמה</th><th>נוסף</th></tr>
       ${data.items.map((c) => `<tr><td class="ltr">${esc(c.email)}</td><td>${esc(c.name)}</td><td>${badge(c.status)}</td><td>${esc(c.consent_source)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
@@ -354,7 +470,7 @@
       const c = await api('GET', `/v1/campaigns/${id}`);
       const s = c.stats;
       const pct = (n) => (s.sent ? `${((n / s.sent) * 100).toFixed(1)}%` : '—');
-      $('#view').innerHTML = `<div class="row between"><h1>${esc(c.name)} ${badge(c.status)}</h1><div class="row">
+      $('#view').innerHTML = `<div class="page-head"><h1>${esc(c.name)} ${badge(c.status)}</h1><div class="row">
         ${['draft', 'scheduled', 'paused'].includes(c.status) ? `<a href="#/campaigns/${id}/edit"><button>עריכה</button></a><button id="test">שליחת בדיקה</button>` : ''}
         ${['draft'].includes(c.status) ? '<button class="primary" id="send">שליחה</button>' : ''}
         ${['scheduled', 'sending'].includes(c.status) ? '<button id="pause">השהיה</button>' : ''}
@@ -380,7 +496,7 @@
       return;
     }
     const list = await api('GET', '/v1/campaigns?limit=100');
-    $('#view').innerHTML = `<div class="row between"><h1>דיוורים</h1><a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a></div>
+    $('#view').innerHTML = `<div class="page-head"><h1>דיוורים</h1><a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a></div>
       <div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>מצב</th><th>נוצר</th></tr>
       ${list.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${esc(c.subject)}</td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
   }
@@ -414,11 +530,11 @@
       return;
     }
     const list = await api('GET', '/v1/templates');
-    $('#view').innerHTML = `<div class="row between"><h1>תבניות</h1><a href="#/templates/new"><button class="primary">תבנית חדשה</button></a></div>
+    $('#view').innerHTML = `<div class="page-head"><h1>תבניות</h1><a href="#/templates/new"><button class="primary">תבנית חדשה</button></a></div>
       <p class="muted">תבנית היא עיצוב ותוכן שאפשר לטעון לכל דיוור חדש. שינוי בתבנית לא משנה דיוורים שכבר נוצרו ממנה.</p>
       ${list.length ? `<div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>עודכנה</th><th></th></tr>
       ${list.map((t) => `<tr><td><a href="#/templates/${t.id}">${esc(t.name)}</a></td><td>${esc(t.subject)}</td><td>${fmtDate(t.updated_at)}</td>
-        <td><a href="#/campaigns/new?template=${t.id}">דיוור מהתבנית</a></td></tr>`).join('')}</table></div>` : '<p class="muted">עוד אין תבניות. אפשר ליצור אחת כאן, או לשמור דיוור קיים כתבנית.</p>'}`;
+        <td><a href="#/campaigns/new?template=${t.id}">דיוור מהתבנית</a></td></tr>`).join('')}</table></div>` : empty('template', 'עוד אין תבניות', 'אפשר ליצור תבנית כאן, או לשמור דיוור קיים כתבנית.', '<a href="#/templates/new"><button class="primary">תבנית חדשה</button></a>')}`;
   }
 
   async function keys() {

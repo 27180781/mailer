@@ -114,6 +114,37 @@ export async function apiRoutes(app: FastifyInstance) {
       usage: { today: await sentToday(req.auth.account.id), daily_limit: req.auth.account.daily_limit },
     }));
 
+    /** Daily counts for the dashboard chart, plus totals for the period (Israel time). */
+    r.get('/v1/stats', async (req) => {
+      const { days } = z.object({ days: z.coerce.number().int().min(1).max(90).default(14) }).parse(req.query);
+      const daily = await query(
+        `WITH d AS (
+           SELECT generate_series((now() AT TIME ZONE 'Asia/Jerusalem')::date - ($2::int - 1), (now() AT TIME ZONE 'Asia/Jerusalem')::date, interval '1 day')::date AS day
+         )
+         SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+           count(m.id) FILTER (WHERE m.status IN ('sent','delivered','bounced','complained'))::int AS sent,
+           count(m.id) FILTER (WHERE m.status = 'delivered')::int AS delivered,
+           count(m.id) FILTER (WHERE m.status IN ('bounced','complained','failed'))::int AS problems,
+           count(m.opened_at)::int AS opened,
+           count(m.clicked_at)::int AS clicked
+         FROM d LEFT JOIN messages m ON m.account_id = $1 AND (m.created_at AT TIME ZONE 'Asia/Jerusalem')::date = d.day
+         GROUP BY d.day ORDER BY d.day`,
+        [req.auth.account.id, days],
+      );
+      const totals = daily.reduce(
+        (t: any, r: any) => ({ sent: t.sent + r.sent, delivered: t.delivered + r.delivered, problems: t.problems + r.problems, opened: t.opened + r.opened, clicked: t.clicked + r.clicked }),
+        { sent: 0, delivered: 0, problems: 0, opened: 0, clicked: 0 },
+      );
+      const [counts] = await query(
+        `SELECT (SELECT count(*)::int FROM contacts WHERE account_id = $1 AND status = 'active') AS contacts,
+                (SELECT count(*)::int FROM lists WHERE account_id = $1) AS lists,
+                (SELECT count(*)::int FROM domains WHERE account_id = $1 AND status = 'verified') AS verified_domains,
+                (SELECT count(*)::int FROM domains WHERE account_id = $1) AS domains`,
+        [req.auth.account.id],
+      );
+      return { days, daily, totals, counts };
+    });
+
     r.patch('/v1/account', async (req) => {
       const b = z
         .object({

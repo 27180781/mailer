@@ -15,12 +15,25 @@ const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA
 
 function page(reply: FastifyReply, title: string, body: string, status = 200) {
   reply.code(status).type('text/html; charset=utf-8');
+  const ok = status < 400;
+  const icon = ok
+    ? '<path d="m5 12 5 5L20 7"/>'
+    : '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>';
   return `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title><meta name="robots" content="noindex">
-<style>body{font-family:Arial,Helvetica,sans-serif;background:#f5f5f4;color:#1c1917;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
-.card{background:#fff;border-radius:12px;padding:32px;max-width:440px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center}
-h1{font-size:22px;margin:0 0 12px}p{line-height:1.6;color:#44403c}button{background:#1c1917;color:#fff;border:0;border-radius:8px;padding:12px 24px;font-size:16px;cursor:pointer}</style>
-</head><body><div class="card"><h1>${escapeHtml(title)}</h1>${body}</div></body></html>`;
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f5f6fb;--card:#fff;--ink:#0f172a;--muted:#64748b;--grad:linear-gradient(135deg,#6d5efc 0%,#4f46e5 45%,#0ea5a4 100%)}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0e1a;--card:#131729;--ink:#e8eaf4;--muted:#8a91a8}}
+*{box-sizing:border-box}body{font-family:Heebo,Arial,sans-serif;background:var(--bg);color:var(--ink);margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.wrap{max-width:440px;width:100%}.card{background:var(--card);border-radius:20px;overflow:hidden;box-shadow:0 24px 60px -24px rgba(15,23,42,.35)}
+.top{background:var(--grad);height:96px;display:flex;align-items:flex-end;justify-content:center}
+.badge{width:64px;height:64px;border-radius:20px;background:var(--card);display:grid;place-items:center;transform:translateY(32px);box-shadow:0 10px 24px -10px rgba(15,23,42,.4);color:${ok ? '#4f46e5' : '#c62828'}}
+.body{padding:48px 28px 32px;text-align:center}h1{font-size:22px;font-weight:800;margin:0 0 10px}p{line-height:1.7;color:var(--muted);margin:0 0 8px}
+button{font:inherit;font-weight:600;background:var(--grad);color:#fff;border:0;border-radius:12px;padding:12px 28px;font-size:16px;cursor:pointer;margin-top:14px;box-shadow:0 8px 20px -8px rgba(79,70,229,.6)}
+.foot{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
+</style></head><body><div class="wrap"><div class="card"><div class="top"><div class="badge"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div></div>
+<div class="body"><h1>${escapeHtml(title)}</h1>${body}</div></div><div class="foot">נשלח באמצעות ${escapeHtml(config.appName)}</div></div></body></html>`;
 }
 
 async function messageFromToken(token: string) {

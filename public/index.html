@@ -4,46 +4,79 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>מערכת דיוור</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236d5efc'/%3E%3Cstop offset='1' stop-color='%230ea5a4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M8 11.5 16 17l8-5.5M9 10h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1Z' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/app/app.css">
 </head>
 <body>
   <div id="auth" class="auth hidden">
-    <div class="card auth-card">
-      <h1>מערכת דיוור</h1>
-      <div class="tabs">
-        <button data-auth-tab="login" class="active">כניסה</button>
-        <button data-auth-tab="signup">פתיחת חשבון</button>
+    <section class="auth-hero">
+      <div class="brand" style="padding:0;color:#fff">
+        <div class="brand-mark" data-icon="mail"></div>
+        <div><div class="brand-name">מערכת דיוור</div></div>
       </div>
-      <form id="login-form">
-        <label>מייל<input name="email" type="email" required autocomplete="email"></label>
-        <label>סיסמה<input name="password" type="password" required autocomplete="current-password"></label>
-        <button class="primary" type="submit">כניסה</button>
-      </form>
-      <form id="signup-form" class="hidden">
-        <label>שם מלא<input name="name" required></label>
-        <label>שם העסק<input name="account_name" required></label>
-        <label>כתובת העסק <small>(מופיעה בתחתית הדיוורים, לפי החוק)</small><input name="company_address"></label>
-        <label>מייל<input name="email" type="email" required autocomplete="email"></label>
-        <label>סיסמה <small>(10 תווים לפחות)</small><input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
-        <button class="primary" type="submit">פתיחת חשבון</button>
-      </form>
-      <p class="error" id="auth-error"></p>
-    </div>
+      <div>
+        <h2>מיילים שמגיעים לתיבה, לא לספאם.</h2>
+        <p>דיוורים ומיילים תפעוליים מהדומיין שלך, עם אימות מלא לפי הדרישות של Gmail, ממשק בעברית ו-API פתוח.</p>
+        <div class="auth-points">
+          <div><span data-icon="shield"></span>DKIM, SPF ו-DMARC לכל דומיין</div>
+          <div><span data-icon="send"></span>שליחה המונית בקצב מבוקר דרך Amazon SES</div>
+          <div><span data-icon="chart"></span>מעקב מסירה, פתיחות, חזרות ותלונות</div>
+        </div>
+      </div>
+      <small style="opacity:.75">עומד בחוק הספאם הישראלי: סימון «פרסומת» והסרה בלחיצה אחת</small>
+    </section>
+    <section class="auth-side">
+      <div class="auth-card">
+        <h1 id="auth-title">ברוך שובך</h1>
+        <p class="sub" id="auth-sub">התחברות לחשבון הדיוור שלך</p>
+        <div class="tabs">
+          <button data-auth-tab="login" class="active">כניסה</button>
+          <button data-auth-tab="signup">פתיחת חשבון</button>
+        </div>
+        <form id="login-form">
+          <label>מייל<input name="email" type="email" required autocomplete="email"></label>
+          <label>סיסמה<input name="password" type="password" required autocomplete="current-password"></label>
+          <button class="primary" type="submit">כניסה</button>
+        </form>
+        <form id="signup-form" class="hidden">
+          <label>שם מלא<input name="name" required></label>
+          <label>שם העסק<input name="account_name" required></label>
+          <label>כתובת העסק <small>(מופיעה בתחתית הדיוורים, לפי החוק)</small><input name="company_address"></label>
+          <label>מייל<input name="email" type="email" required autocomplete="email"></label>
+          <label>סיסמה <small>(10 תווים לפחות)</small><input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
+          <button class="primary" type="submit">פתיחת חשבון</button>
+        </form>
+        <p class="error" id="auth-error"></p>
+      </div>
+    </section>
   </div>
 
   <div id="shell" class="shell hidden">
     <aside class="nav">
-      <div class="brand" id="brand">מערכת דיוור</div>
+      <div class="brand">
+        <div class="brand-mark" data-icon="mail"></div>
+        <div style="min-width:0"><div class="brand-name" id="brand">מערכת דיוור</div><div class="brand-sub" id="brand-sub"></div></div>
+      </div>
       <nav id="nav"></nav>
       <div class="nav-foot">
-        <div id="who"></div>
-        <button class="link" id="logout">יציאה</button>
+        <div class="avatar" id="avatar"></div>
+        <div class="who"><b id="who-name"></b><span id="who"></span></div>
+        <button id="logout" title="יציאה" data-icon="logout"></button>
       </div>
     </aside>
-    <main>
-      <div id="banner"></div>
-      <div id="view"></div>
-    </main>
+    <div>
+      <header class="topbar">
+        <button id="menu" data-icon="menu" aria-label="תפריט"></button>
+        <b id="topbar-title">מערכת דיוור</b>
+      </header>
+      <main>
+        <div id="banner"></div>
+        <div id="view"></div>
+      </main>
+    </div>
   </div>
 
   <div id="modal" class="modal hidden"><div class="card modal-card"><div id="modal-body"></div></div></div>
