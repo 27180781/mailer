@@ -6,19 +6,21 @@
   "version": 1,
   "logoUrl": "https://mail.retsef.co.il/app/logo.svg",
   "description": "Publishes a BIMI record so mailbox providers can show the sender logo hosted by the Retzef mailer.",
-  "variableDescription": "bimi: BIMI record",
+  "variableDescription": "No variables: the logo URL is built from the domain name.",
   "syncBlock": false,
   "sharedProviderName": false,
   "syncPubKeyDomain": "retsef.co.il",
   "syncRedirectDomain": "mail.retsef.co.il",
-  "warnPhishing": true,
   "hostRequired": false,
   "records": [
     {
       "type": "TXT",
       "host": "default._bimi",
-      "data": "%bimi%",
-      "ttl": 3600
+      "data": "v=BIMI1; l=https://mail.retsef.co.il/bimi/%fqdn%/logo.svg;",
+      "ttl": 3600,
+      "txtConflictMatchingMode": "Prefix",
+      "txtConflictMatchingPrefix": "v=BIMI1",
+      "essential": "OnApply"
     }
   ]
 }

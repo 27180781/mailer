@@ -484,8 +484,9 @@ test('Domain Connect: discovery, signed apply URL with the right groups, callbac
     assert.equal(p.get('host'), 'mail');
     assert.equal(p.get('dmarc'), null, 'existing DMARC is not re-applied');
     assert.equal(p.get('dkim1'), 'aaa');
-    assert.equal(p.get('dkimhost'), 'dkim.il-central-1.amazonses.com');
-    assert.equal(p.get('mailfrom'), 'bounce');
+    assert.equal(p.get('region'), 'il-central-1');
+    assert.equal(p.get('dkimhost'), null);
+    assert.equal(p.get('mailfrom'), null, 'MAIL FROM label is fixed in the template');
     assert.equal(p.get('key'), '_dck1');
     // Signature verifies against the published public key
     const qs = r.body.url.split('?')[1].split('&key=')[0];
@@ -498,7 +499,20 @@ test('Domain Connect: discovery, signed apply URL with the right groups, callbac
     // Template records produce the same names as our records
     const all = dc.templates();
     assert.deepEqual(all.map((x: any) => x.serviceId), ['mailer', 'mailer-nodmarc', 'mailer-bimi']);
-    assert.ok(all[1].records.some((x: any) => x.host === '%dkim1%._domainkey' && x.pointsTo === '%dkim1%.%dkimhost%'));
+    assert.ok(all[1].records.some((x: any) => x.host === '%dkim1%._domainkey' && x.pointsTo === '%dkim1%.dkim.%region%.amazonses.com'));
+    assert.ok(all[1].records.some((x: any) => x.type === 'MX' && x.host === 'bounce' && x.pointsTo === 'feedback-smtp.%region%.amazonses.com'));
+    assert.ok(all.every((x: any) => x.syncPubKeyDomain && !('warnPhishing' in x)), 'syncPubKeyDomain without warnPhishing');
+    const dmarcRec = all[0].records.find((x: any) => x.host === '_dmarc');
+    assert.equal(dmarcRec.data, 'v=DMARC1; p=%dmarcpolicy%; adkim=r; aspf=r');
+    assert.equal(dmarcRec.txtConflictMatchingMode, 'Prefix');
+    assert.equal(dmarcRec.essential, 'OnApply');
+    // No record is a bare variable, and no host label is a bare variable
+    for (const t of all) for (const x of t.records as any[]) {
+      assert.doesNotMatch(String(x.data ?? x.pointsTo ?? ''), /^%[a-z0-9]+%$/);
+      assert.doesNotMatch(String(x.host), /^%[a-z0-9]+%$/);
+    }
+    assert.equal(dc.applyParams({ name: 'mail.dcshop.test', records: [{ type: 'TXT', name: 'default._bimi.mail.dcshop.test', value: 'v=BIMI1; l=https://x/logo.svg; a=;', purpose: 'bimi', status: 'pending' } as any] })?.serviceId, 'mailer-bimi');
+    assert.equal(dc.applyParams({ name: 'mail.dcshop.test', records: [{ type: 'TXT', name: 'default._bimi.mail.dcshop.test', value: 'v=BIMI1; l=https://x/logo.svg; a=https://x/c.pem;', purpose: 'bimi', status: 'pending' } as any] }), null, 'VMC certificate → added by hand');
     assert.ok(all[1].records.some((x: any) => x.type === 'SPFM'), 'SPF merged, never a second record');
     assert.ok(!all[1].records.some((x: any) => x.host === '_dmarc'));
     assert.ok(r.body.url.endsWith(`&sig=${encodeURIComponent(p.get('sig')!)}`), 'signature is the last parameter');

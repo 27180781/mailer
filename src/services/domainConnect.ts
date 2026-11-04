@@ -30,6 +30,8 @@ export const DC_SERVICES = {
   bimi: 'mailer-bimi',
 } as const;
 export const DC_SERVICE_ID = DC_SERVICES.main;
+/** The MAIL FROM label is fixed in the templates */
+const MAIL_FROM_LABEL = 'bounce';
 
 function baseTemplate(serviceId: string, serviceName: string, description: string, records: object[], variableDescription: string) {
   return {
@@ -45,28 +47,50 @@ function baseTemplate(serviceId: string, serviceName: string, description: strin
     sharedProviderName: false,
     syncPubKeyDomain: DC_PROVIDER_ID,
     syncRedirectDomain: new URL(config.publicUrl).hostname,
-    warnPhishing: true,
     hostRequired: false,
     records,
   };
 }
 
+/**
+ * Only the variable parts are variables (the Domain Connect quality rules): fixed host labels,
+ * fixed target domains, and the DMARC/BIMI values built around a small variable.
+ */
 const SENDING_RECORDS = [
-  ...[1, 2, 3].map((i) => ({ type: 'CNAME', host: `%dkim${i}%._domainkey`, pointsTo: `%dkim${i}%.%dkimhost%`, ttl: 3600 })),
-  { type: 'MX', host: '%mailfrom%', pointsTo: '%mxhost%', priority: 10, ttl: 3600 },
+  ...[1, 2, 3].map((i) => ({ type: 'CNAME', host: `%dkim${i}%._domainkey`, pointsTo: `%dkim${i}%.dkim.%region%.amazonses.com`, ttl: 3600 })),
+  { type: 'MX', host: MAIL_FROM_LABEL, pointsTo: 'feedback-smtp.%region%.amazonses.com', priority: 10, ttl: 3600 },
   // SPFM merges with an existing SPF record instead of creating a second one (Cloudflare requirement)
-  { type: 'SPFM', host: '%mailfrom%', spfRules: 'include:amazonses.com' },
+  { type: 'SPFM', host: MAIL_FROM_LABEL, spfRules: 'include:amazonses.com' },
 ];
-const SENDING_VARS = 'dkim1, dkim2, dkim3: DKIM tokens; dkimhost: DKIM target domain (e.g. dkim.il-central-1.amazonses.com); mailfrom: MAIL FROM subdomain (e.g. bounce); mxhost: bounce MX host';
+const SENDING_VARS = 'dkim1, dkim2, dkim3: the Amazon SES Easy DKIM tokens of the domain; region: the Amazon SES region (e.g. il-central-1)';
+
+const DMARC_RECORD = {
+  type: 'TXT',
+  host: '_dmarc',
+  data: 'v=DMARC1; p=%dmarcpolicy%; adkim=r; aspf=r',
+  ttl: 3600,
+  txtConflictMatchingMode: 'Prefix',
+  txtConflictMatchingPrefix: 'v=DMARC1',
+  essential: 'OnApply',
+};
 
 export function templates() {
+  const bimiRecord = {
+    type: 'TXT',
+    host: 'default._bimi',
+    data: `v=BIMI1; l=${config.publicUrl}/bimi/%fqdn%/logo.svg;`,
+    ttl: 3600,
+    txtConflictMatchingMode: 'Prefix',
+    txtConflictMatchingPrefix: 'v=BIMI1',
+    essential: 'OnApply',
+  };
   return [
     baseTemplate(
       DC_SERVICES.main,
       'Email sending (DKIM, MAIL FROM, DMARC)',
       'Adds the DNS records to send authenticated email through the Retzef mailer (Amazon SES): DKIM, a custom MAIL FROM domain with SPF, and a DMARC policy.',
-      [...SENDING_RECORDS, { type: 'TXT', host: '_dmarc', data: '%dmarc%', ttl: 3600 }],
-      `${SENDING_VARS}; dmarc: DMARC record`,
+      [...SENDING_RECORDS, DMARC_RECORD],
+      `${SENDING_VARS}; dmarcpolicy: DMARC policy (none, quarantine or reject)`,
     ),
     baseTemplate(
       DC_SERVICES.keepDmarc,
@@ -79,8 +103,8 @@ export function templates() {
       DC_SERVICES.bimi,
       'Sender logo (BIMI)',
       'Publishes a BIMI record so mailbox providers can show the sender logo hosted by the Retzef mailer.',
-      [{ type: 'TXT', host: 'default._bimi', data: '%bimi%', ttl: 3600 }],
-      'bimi: BIMI record',
+      [bimiRecord],
+      'No variables: the logo URL is built from the domain name.',
     ),
   ];
 }
@@ -162,19 +186,27 @@ export function applyParams(row: { name: string; records: DnsRecord[] }): { serv
   const sendingPending = pending('dkim').length || pending('mail_from_mx').length || pending('mail_from_spf').length;
   const ownDmarc = pending('dmarc').find((r) => r.name === `_dmarc.${row.name}`);
 
-  if (sendingPending && dkim.length === 3 && dkim.every((r) => r.type === 'CNAME') && mx && spf) {
-    const vars: Record<string, string> = {};
+  const region = dkim[0]?.value.match(/^[^.]+\.dkim\.([a-z0-9-]+)\.amazonses\.com\.?$/)?.[1];
+  const policy = ownDmarc?.value.match(/^v=DMARC1;.*\bp=(none|quarantine|reject)\b/i)?.[1].toLowerCase();
+  const fits =
+    dkim.length === 3 &&
+    dkim.every((r) => r.type === 'CNAME' && r.value.replace(/\.$/, '').endsWith(`.dkim.${region}.amazonses.com`)) &&
+    mx?.name === `${MAIL_FROM_LABEL}.${row.name}` &&
+    mx.value.replace(/\.$/, '') === `feedback-smtp.${region}.amazonses.com` &&
+    spf?.name === mx.name &&
+    (!ownDmarc || !!policy);
+
+  if (sendingPending && region && fits) {
+    const vars: Record<string, string> = { region };
     dkim.forEach((r, i) => {
       vars[`dkim${i + 1}`] = r.name.split('._domainkey.')[0];
     });
-    vars.dkimhost = dkim[0].value.replace(/^[^.]+\./, '').replace(/\.$/, '');
-    vars.mailfrom = mx.name.slice(0, -(row.name.length + 1));
-    vars.mxhost = mx.value.replace(/\.$/, '');
-    if (ownDmarc) vars.dmarc = ownDmarc.value;
+    if (ownDmarc) vars.dmarcpolicy = policy!;
     return { serviceId: ownDmarc ? DC_SERVICES.main : DC_SERVICES.keepDmarc, vars };
   }
+  // The template publishes the logo without a certificate (a=); with a VMC the record is added by hand
   const bimi = pending('bimi')[0];
-  if (bimi) return { serviceId: DC_SERVICES.bimi, vars: { bimi: bimi.value } };
+  if (bimi && !/\ba=[^;\s]/.test(bimi.value) && bimi.name === `default._bimi.${row.name}`) return { serviceId: DC_SERVICES.bimi, vars: {} };
   return null;
 }
 
