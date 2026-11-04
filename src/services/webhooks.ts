@@ -17,6 +17,7 @@ export const WEBHOOK_EVENTS = [
   'domain.degraded',
   'campaign.paused',
   'campaign.finished',
+  'account.suspended',
 ] as const;
 
 export function newWebhookSecret() {

@@ -6,10 +6,12 @@ import { hashPassword, verifyPassword, sha256 } from '../crypto.js';
 import { ApiError, notFound } from '../errors.js';
 import { authenticate, createApiKey, createSession, requirePlatform, requireSuperAdmin } from '../auth.js';
 import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '../services/domains.js';
+import { bimiRecordValue, bimiStatus, validateBimiSvg, validateCertificate } from '../services/bimi.js';
 import { enqueueEmail, resolveFrom, sentToday } from '../services/send.js';
 import { campaignStats } from '../services/campaigns.js';
 import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
 import { suppress } from '../services/suppression.js';
+import { runAutoTrust, trustInfo } from '../services/trust.js';
 
 const email = z.string().trim().toLowerCase().email('כתובת מייל לא תקינה');
 const uuid = z.string().uuid('מזהה לא תקין');
@@ -116,6 +118,8 @@ export async function apiRoutes(app: FastifyInstance) {
       account: publicAccount(req.auth.account),
       user: req.auth.user && { id: req.auth.user.id, email: req.auth.user.email, name: req.auth.user.name, is_superadmin: req.auth.user.is_superadmin },
       usage: { today: await sentToday(req.auth.account.id), daily_limit: req.auth.account.daily_limit },
+      trust: await trustInfo(req.auth.account),
+      test_mode: req.auth.testMode,
     }));
 
     /** Daily counts for the dashboard chart, plus totals for the period (Israel time). */
@@ -272,7 +276,32 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     r.get('/v1/domains/:id', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
-      return publicDomain(await owned('domains', id, req.auth.account.id, 'הדומיין'));
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      return { ...publicDomain(row), bimi: await bimiStatus(row) };
+    });
+
+    /** BIMI: upload the sender logo (SVG Tiny PS) and optionally a VMC/CMC certificate. */
+    r.put('/v1/domains/:id/bimi', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      const b = z.object({ svg: z.string().min(20).max(64_000), certificate: z.string().max(64_000).nullish() }).parse(req.body);
+      const errors = [...validateBimiSvg(b.svg), ...(b.certificate ? validateCertificate(b.certificate) : [])];
+      if (errors.length) throw new ApiError(400, 'invalid_bimi', errors.join(' · '), { errors });
+      const name = `default._bimi.${row.name}`;
+      const records = (row.records as any[]).filter((r) => r.purpose !== 'bimi');
+      records.push({ type: 'TXT', name, value: bimiRecordValue(row.name, !!b.certificate), purpose: 'bimi', status: 'pending' });
+      await query(`UPDATE domains SET bimi_svg = $2, bimi_certificate = $3, records = $4 WHERE id = $1`, [id, b.svg.trim(), b.certificate?.trim() || null, JSON.stringify(records)]);
+      const fresh = await one('SELECT * FROM domains WHERE id = $1', [id]);
+      await checkDomain(fresh);
+      const after = await one('SELECT * FROM domains WHERE id = $1', [id]);
+      return { ...publicDomain(after), bimi: await bimiStatus(after) };
+    });
+    r.delete('/v1/domains/:id/bimi', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      const records = (row.records as any[]).filter((r) => r.purpose !== 'bimi');
+      await query(`UPDATE domains SET bimi_svg = NULL, bimi_certificate = NULL, records = $2 WHERE id = $1`, [id, JSON.stringify(records)]);
+      return { ok: true };
     });
     /** DNS records as a zone file for import (Cloudflare: DNS → Records → Import and Export). */
     r.get('/v1/domains/:id/zone', async (req, reply) => {
@@ -283,7 +312,10 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     r.post('/v1/domains/:id/verify', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
-      return checkDomain(await owned('domains', id, req.auth.account.id, 'הדומיין'));
+      const checked = await checkDomain(await owned('domains', id, req.auth.account.id, 'הדומיין'));
+      if (checked.status === 'verified' && req.auth.account.trust_level === 0) await runAutoTrust();
+      const row = await one('SELECT * FROM domains WHERE id = $1', [id]);
+      return { ...checked, bimi: await bimiStatus(row) };
     });
     r.delete('/v1/domains/:id', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
@@ -675,6 +707,11 @@ export async function apiRoutes(app: FastifyInstance) {
          FROM accounts a ORDER BY created_at DESC`,
       );
     });
+    r.post('/admin/trust/run', async (req) => {
+      requireSuperAdmin(req);
+      await runAutoTrust();
+      return { ok: true };
+    });
     r.patch('/admin/accounts/:id', async (req) => {
       requireSuperAdmin(req);
       const { id } = z.object({ id: uuid }).parse(req.params);
@@ -685,13 +722,18 @@ export async function apiRoutes(app: FastifyInstance) {
           daily_limit: z.number().int().min(0).max(10_000_000).optional(),
           monthly_limit: z.number().int().min(0).nullish(),
           can_use_reserved_domains: z.boolean().optional(),
+          auto_trust: z.boolean().optional(),
         })
         .parse(req.body);
       const row = await one(
         `UPDATE accounts SET status = coalesce($2, status), type = coalesce($3, type), daily_limit = coalesce($4, daily_limit),
            monthly_limit = CASE WHEN $5::boolean THEN $6 ELSE monthly_limit END,
-           can_use_reserved_domains = coalesce($7, can_use_reserved_domains) WHERE id = $1 RETURNING *`,
-        [id, b.status ?? null, b.type ?? null, b.daily_limit ?? null, b.monthly_limit !== undefined, b.monthly_limit ?? null, b.can_use_reserved_domains ?? null],
+           can_use_reserved_domains = coalesce($7, can_use_reserved_domains),
+           trust_manual = CASE WHEN $8::boolean IS NULL THEN trust_manual ELSE $8 END,
+           paused_reason = CASE WHEN $2 = 'active' THEN NULL ELSE paused_reason END
+         WHERE id = $1 RETURNING *`,
+        [id, b.status ?? null, b.type ?? null, b.daily_limit ?? null, b.monthly_limit !== undefined, b.monthly_limit ?? null, b.can_use_reserved_domains ?? null,
+         b.auto_trust === undefined ? (b.daily_limit !== undefined ? true : null) : !b.auto_trust],
       );
       if (!row) throw notFound('החשבון');
       return row;

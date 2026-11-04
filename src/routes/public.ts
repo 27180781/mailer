@@ -51,6 +51,20 @@ async function doUnsubscribe(msg: any) {
 export async function publicRoutes(app: FastifyInstance) {
   app.get('/health', async () => ({ ok: true }));
 
+  // BIMI assets: mailbox providers fetch the logo and certificate from here
+  app.get('/bimi/:domain/logo.svg', async (req, reply) => {
+    const row = await one('SELECT bimi_svg FROM domains WHERE name = $1', [String((req.params as any).domain).toLowerCase()]);
+    if (!row?.bimi_svg) return reply.code(404).send('not found');
+    reply.header('cache-control', 'public, max-age=3600').type('image/svg+xml');
+    return row.bimi_svg;
+  });
+  app.get('/bimi/:domain/certificate.pem', async (req, reply) => {
+    const row = await one('SELECT bimi_certificate FROM domains WHERE name = $1', [String((req.params as any).domain).toLowerCase()]);
+    if (!row?.bimi_certificate) return reply.code(404).send('not found');
+    reply.header('cache-control', 'public, max-age=3600').type('application/x-pem-file');
+    return row.bimi_certificate;
+  });
+
   // Unsubscribe. GET shows a one-button page (so link scanners don't unsubscribe people);
   // POST does it, which is also what Gmail's one-click (RFC 8058) sends.
   app.get('/u/:token', async (req, reply) => {

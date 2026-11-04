@@ -345,3 +345,48 @@ test('test API keys simulate sending without sending or suppressing', async () =
   const live = await api('POST', '/v1/emails', u.body.token, { from: 'hello@not-verified-yet.test', to: 'ok@client.test', subject: 'x', text: 'x' });
   assert.equal(live.body.error.code, 'domain_not_verified');
 });
+
+test('BIMI logo validation, hosting and DNS record', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const [d] = (await api('GET', '/v1/domains', u.body.token)).body.filter((x: any) => x.name === 'docs.retzef.test');
+  const bad = await api('PUT', `/v1/domains/${d.id}/bimi`, u.body.token, { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><script>x()</script></svg>' });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.body.error.details.errors.length >= 3);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" version="1.2" baseProfile="tiny-ps" viewBox="0 0 100 100"><title>Retzef</title><rect width="100" height="100" fill="#4f46e5"/></svg>';
+  const ok = await api('PUT', `/v1/domains/${d.id}/bimi`, u.body.token, { svg });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.bimi.enabled, true);
+  assert.equal(ok.body.bimi.dmarc.ready, false, 'p=none is not enough for BIMI');
+  assert.match(ok.body.bimi.dns_record.value, /^v=BIMI1; l=https:\/\/mail\.platform\.test\/bimi\/docs\.retzef\.test\/logo\.svg; a=;$/);
+  const logo = await app.inject({ method: 'GET', url: '/bimi/docs.retzef.test/logo.svg' });
+  assert.equal(logo.statusCode, 200);
+  assert.match(String(logo.headers['content-type']), /image\/svg\+xml/);
+  const { zoneFile } = await import('../src/services/domains.js');
+  const [row] = await query(`SELECT * FROM domains WHERE id = $1`, [d.id]);
+  assert.match(zoneFile(row), /default\._bimi\.docs\.retzef\.test\.\t3600\tIN\tTXT\t"v=BIMI1;/);
+});
+
+test('automatic trust: verified domain and legal details activate a new account; bad rates suspend it', async () => {
+  const admin = await api('POST', '/v1/auth/login', undefined, { email: 'admin@platform.test', password: 'very-secret-1' });
+  const u = await api('POST', '/v1/auth/signup', undefined, { email: 'owner@magnet.test', password: 'very-secret-5', name: 'מגנט', account_name: 'מגנט ADS' });
+  assert.equal(u.body.account.status, 'pending');
+  let me = await api('GET', '/v1/me', u.body.token);
+  assert.match(me.body.trust.next_step, /לאמת דומיין שליחה/);
+  await api('POST', '/v1/domains', u.body.token, { name: 'magnet.test' });
+  await api('POST', '/admin/trust/run', admin.body.token);
+  me = await api('GET', '/v1/me', u.body.token);
+  assert.equal(me.body.account.status, 'pending', 'legal details still missing');
+  await api('PATCH', '/v1/account', u.body.token, { company_name: 'מגנט ADS', company_address: 'תל אביב' });
+  await api('POST', '/admin/trust/run', admin.body.token);
+  me = await api('GET', '/v1/me', u.body.token);
+  assert.equal(me.body.account.status, 'active');
+  assert.equal(me.body.trust.level, 1);
+  assert.equal(me.body.account.daily_limit, 1000);
+
+  // 100 bounced messages in the last week → suspended
+  await query(`INSERT INTO messages (account_id, kind, to_email, from_email, status, created_at) SELECT $1, 'transactional', 'b'||g||'@x.test', 'a@magnet.test', 'bounced', now() FROM generate_series(1,100) g`, [me.body.account.id]);
+  await api('POST', '/admin/trust/run', admin.body.token);
+  me = await api('GET', '/v1/me', u.body.token);
+  assert.equal(me.body.account.status, 'suspended');
+  assert.match(me.body.account.paused_reason, /הושעתה אוטומטית/);
+});

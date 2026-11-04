@@ -134,7 +134,15 @@ export async function checkDomain(row: any) {
   else if (Date.now() - new Date(row.created_at).getTime() > VERIFY_WINDOW_HOURS * 3600_000) next = 'failed';
   else next = 'pending';
 
+  const bimiRec = (row.records as DnsRecord[]).find((r) => r.purpose === 'bimi');
+  let bimiDns = 'pending';
+  if (bimiRec) {
+    const found = await txt(bimiRec.name);
+    const want = bimiRec.value.match(/l=([^;\s]+)/)?.[1];
+    bimiDns = found.some((t) => /v=BIMI1/i.test(t) && (!want || t.includes(want))) ? 'verified' : 'pending';
+  }
   const byPurpose: Record<string, string> = {
+    bimi: bimiDns,
     dkim: status.dkim,
     mail_from_mx: status.mailFrom,
     mail_from_spf: status.mailFrom,
