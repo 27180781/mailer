@@ -184,6 +184,7 @@ export async function apiRoutes(app: FastifyInstance) {
           fallback_from_email: email.nullish(),
           fallback_name_template: z.string().max(120).optional(),
           track_transactional: z.boolean().optional(),
+          ad_label_default: z.boolean().optional(),
         })
         .parse(req.body);
       const fields = Object.entries(b).filter(([, v]) => v !== undefined);
@@ -609,7 +610,7 @@ export async function apiRoutes(app: FastifyInstance) {
       html: z.string().max(2_000_000).default(''),
       text: z.string().nullish(),
       template_id: uuid.nullish(),
-      is_advertisement: z.boolean().default(true),
+      is_advertisement: z.boolean().optional(),
       list_ids: z.array(uuid).default([]),
     });
     async function setLists(campaignId: string, accountId: string, listIds: string[]) {
@@ -640,7 +641,7 @@ export async function apiRoutes(app: FastifyInstance) {
       const c = await one(
         `INSERT INTO campaigns (account_id, sender_id, name, subject, from_name, from_email, reply_to, html, text, is_advertisement)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-        [req.auth.account.id, b.sender_id ?? null, b.name, subject, b.from_name, b.from_email, b.reply_to ?? null, html, text ?? null, b.is_advertisement],
+        [req.auth.account.id, b.sender_id ?? null, b.name, subject, b.from_name, b.from_email, b.reply_to ?? null, html, text ?? null, b.is_advertisement ?? req.auth.account.ad_label_default],
       );
       await setLists(c.id, req.auth.account.id, b.list_ids);
       reply.code(201);

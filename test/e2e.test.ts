@@ -512,3 +512,26 @@ test('Domain Connect: discovery, signed apply URL with the right groups, callbac
     dc.dcHttp.fetch = realFetch;
   }
 });
+
+test('ad label: account default off, per-campaign override', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  await api('PATCH', '/v1/account', K, { ad_label_default: false });
+  const list = await api('POST', '/v1/lists', K, { name: 'עדכונים', double_opt_in: false });
+  await api('POST', '/v1/contacts/import', K, { contacts: [{ email: 'member1@client.test', name: 'חבר' }], list_ids: [list.body.id], consent_source: 'מועדון', consent_declared: true });
+  const base = { subject: 'עדכון למועדון', from_name: 'רצף', from_email: 'news@docs.retzef.test', html: '<p>שלום</p>', list_ids: [list.body.id] };
+  const plain = await api('POST', '/v1/campaigns', K, { name: 'בלי תווית', ...base });
+  assert.equal(plain.body.is_advertisement, false, 'follows the account default');
+  const forced = await api('POST', '/v1/campaigns', K, { name: 'עם תווית', ...base, is_advertisement: true });
+  assert.equal(forced.body.is_advertisement, true);
+
+  await api('POST', `/v1/campaigns/${plain.body.id}/send`, K, {});
+  await startDueCampaigns();
+  const before = sent().length;
+  while ((await sendBatch(50)) > 0);
+  const raw = sent().slice(before).find((m) => m.to === 'member1@client.test')!.raw.toString();
+  const subj = raw.split('\r\n').find((l) => l.startsWith('Subject:'))!;
+  const decoded = subj.replace(/=\?UTF-8\?B\?([^?]+)\?=/gi, (_, b) => Buffer.from(b, 'base64').toString());
+  assert.doesNotMatch(decoded, /פרסומת/);
+  await api('PATCH', '/v1/account', K, { ad_label_default: true });
+});

@@ -522,7 +522,8 @@
     return `<form id="cf" class="card">
       ${tpls.length ? `<label>טעינה מתבנית<select id="tpl-pick"><option value="">בחירת תבנית…</option>${tpls.map((t) => `<option value="${t.id}" ${preset?.id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>` : ''}
       <label>שם פנימי<input name="name" value="${esc(c?.name || (preset ? preset.name : ''))}" required></label>
-      <label>נושא <small>(אפשר {{name}}. המילה «פרסומת» מתווספת אוטומטית)</small><input name="subject" value="${esc(c?.subject || preset?.subject || '')}" required></label>
+      <label>נושא <small>(אפשר {{name}})</small><input name="subject" value="${esc(c?.subject || preset?.subject || '')}" required></label>
+      <label style="font-weight:500"><input type="checkbox" name="is_advertisement" ${(c ? c.is_advertisement : me.account.ad_label_default) ? 'checked' : ''}> להוסיף «פרסומת» בתחילת הנושא <small>(חובה בדיוור פרסומי לפי חוק התקשורת)</small></label>
       <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
       <div style="flex:1">${senderField(c?.from_email || '', doms)}</div></div>
       <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
@@ -556,6 +557,7 @@
   function readCampaignForm(f) {
     const b = formData(f);
     delete b.list;
+    b.is_advertisement = f.is_advertisement.checked;
     if (b.from_local !== undefined) {
       b.from_email = `${String(b.from_local).trim()}@${b.from_domain}`;
       delete b.from_local;
@@ -712,6 +714,8 @@
       <label>כתובת<input name="company_address" value="${esc(a.company_address)}"></label>
       <label>מייל ליצירת קשר<input name="contact_email" class="ltr" value="${esc(a.contact_email)}"></label>
       <label><input type="checkbox" name="track_transactional" ${a.track_transactional ? 'checked' : ''}> מעקב פתיחות והקלקות גם במיילים תפעוליים</label>
+      <label><input type="checkbox" name="ad_label_default" ${a.ad_label_default ? 'checked' : ''}> להוסיף «פרסומת» אוטומטית לנושא של דיוורים חדשים</label>
+      <p class="muted" style="margin:-8px 0 16px;font-size:13px">לפי חוק התקשורת (סעיף 30א), דיוור פרסומי חייב לכלול את המילה «פרסומת» בכותרת. אפשר לכבות את זה לדיוורים שאינם פרסומיים, או אם מוסיפים את המילה בעצמכם. בכל דיוור אפשר גם להחליט בנפרד. האחריות על השימוש בהגדרה היא של בעל החשבון.</p>
       ${a.type === 'platform' ? `<h2>כתובת גיבוי לשולחים לא מאומתים</h2>
       <label>כתובת השולח <small>(על דומיין מאומת של החשבון, אי אפשר להשיב אליה)</small><input name="fallback_from_email" class="ltr" value="${esc(a.fallback_from_email)}" placeholder="noreply@docs.example.co.il"></label>
       <label>תבנית שם השולח<input name="fallback_name_template" value="${esc(a.fallback_name_template)}"></label>
@@ -721,6 +725,7 @@
       e.preventDefault();
       const b = formData(e.target);
       b.track_transactional = !!e.target.track_transactional.checked;
+      b.ad_label_default = !!e.target.ad_label_default.checked;
       for (const k of ['company_name', 'company_address', 'contact_email', 'fallback_from_email']) if (k in b && !b[k]) b[k] = null;
       try { await api('PATCH', '/v1/account', b); toast('נשמר'); } catch (err) { toast(err.message); }
     };
