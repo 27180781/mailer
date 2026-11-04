@@ -136,3 +136,18 @@ AWS_SECRET_ACCESS_KEY=<מהמשתמש mailer-ses>
 4. **GitHub:** במאגר מוסיפים את הסודות `CAPROVER_SERVER`, `CAPROVER_APP` (`mailer`) ו-`CAPROVER_APP_TOKEN`, ומריצים מחדש את ה-workflow.
 5. **בדיקה:** ‏`https://mail.retsef.co.il/health` מחזיר `{"ok":true}`. אחר כך פותחים חשבון עם המייל שב-`SUPER_ADMIN_EMAILS`.
 6. **SNS:** מוסיפים מנוי HTTPS ל-topic `mailer-ses-events`, אל `https://mail.retsef.co.il/webhooks/provider/ses`. המנוי צריך לעבור לסטטוס Confirmed תוך דקה.
+
+## בקשה להגדלת מכסה (לקראת לקוחות כמו מגנט)
+
+המכסה היום: 14 בשנייה ו-50,000 ביממה, משותפת לרצף ולמערכת הדיוור. לקוח שצריך 10 בשנייה לבד דורש מכסה גדולה יותר.
+
+איפה: Service Quotas ← Amazon SES ← אזור il-central-1:
+- **Sending quota** (מיילים ב-24 שעות): לבקש 200,000.
+- **Maximum send rate** (מיילים בשנייה): לבקש 50.
+
+נוסח מוצע לשדה Use case description:
+
+> We run a multi-tenant email platform (https://mail.retsef.co.il) for Israeli businesses on this account, alongside the transactional email of our accounting software. A new customer, a CRM, needs at least 10 messages per second and 10,000 per day on its own, so we are asking to raise the sending quota to 200,000 per day and the send rate to 50 per second.
+> Our current bounce and complaint rates are low. Every sending domain must pass DKIM, SPF (custom MAIL FROM) and DMARC. Hard bounces and complaints are suppressed automatically through SNS. New accounts start at 200 messages a day and grow only with clean sending, and accounts with high bounce or complaint rates are suspended automatically. Marketing mail carries one-click List-Unsubscribe, as required by Israeli anti-spam law.
+
+אחרי האישור מעדכנים ב-CapRover את `MAX_SEND_RATE` (למשל 40) ואת `DAILY_SEND_CAP` (למשל 180,000), ומשאירים מקום לרצף.

@@ -288,7 +288,10 @@ export async function apiRoutes(app: FastifyInstance) {
       const errors = [...validateBimiSvg(b.svg), ...(b.certificate ? validateCertificate(b.certificate) : [])];
       if (errors.length) throw new ApiError(400, 'invalid_bimi', errors.join(' · '), { errors });
       const name = `default._bimi.${row.name}`;
-      const records = (row.records as any[]).filter((r) => r.purpose !== 'bimi');
+      // A domain with no DMARC record yet gets a suggestion strict enough for BIMI
+      const records = (row.records as any[])
+        .filter((r) => r.purpose !== 'bimi')
+        .map((r) => (r.purpose === 'dmarc' && r.status !== 'verified' ? { ...r, value: 'v=DMARC1; p=quarantine; pct=100; adkim=r; aspf=r' } : r));
       records.push({ type: 'TXT', name, value: bimiRecordValue(row.name, !!b.certificate), purpose: 'bimi', status: 'pending' });
       await query(`UPDATE domains SET bimi_svg = $2, bimi_certificate = $3, records = $4 WHERE id = $1`, [id, b.svg.trim(), b.certificate?.trim() || null, JSON.stringify(records)]);
       const fresh = await one('SELECT * FROM domains WHERE id = $1', [id]);

@@ -1,0 +1,449 @@
+openapi: 3.0.3
+info:
+  title: Mailer API
+  version: "1.0"
+  description: |
+    API לשליחת מיילים תפעוליים ודיוורים, לניהול דומיינים, אנשי קשר, רשימות, דיוורים ו-webhooks.
+    כל מה שאפשר לעשות בממשק אפשר לעשות גם כאן.
+
+    ## אימות
+    כל בקשה נושאת מפתח API בכותרת `Authorization: Bearer <key>`. יוצרים מפתחות במסך "מפתחות API".
+    - `mk_live_…` שולח מיילים באמת.
+    - `mk_test_…` מפתח בדיקה: עובר את כל התהליך, מחזיר מזהים ושולח webhooks, אבל לא שולח מיילים.
+      אפשר להתחיל בו לפני שהדומיין מאומת. כתובת נמען שמתחילה ב-`bounce` מדמה חזרה,
+      `complaint` מדמה תלונה ו-`delay` מדמה עיכוב במסירה. כל כתובת אחרת מדמה מסירה.
+
+    ## מגבלות
+    - 120 בקשות בדקה לכל מפתח. מעבר לזה מתקבלת תשובה `429`.
+    - עד 50 נמענים במייל (`to`, `cc` ו-`bcc` יחד), ועד 10MB קבצים מצורפים.
+    - מכסה יומית לחשבון, שעולה אוטומטית לפי איכות השליחה. המכסה הנוכחית ב-`GET /v1/me`.
+
+    ## שגיאות
+    כל שגיאה חוזרת בפורמט `{"error": {"code": "...", "message": "..."}}`. ה-`message` בעברית ומתאים להצגה למשתמש.
+
+    ## שרשור מיילים (Re:)
+    כדי שתשובה תופיע באותו שרשור אצל הנמען, שולחים בכותרות `In-Reply-To` ו-`References` את ה-Message-ID של המייל המקורי.
+    כל מייל מקבל `message_id_header` שחוזר בתשובה. שומרים אותו כדי להשיב עליו בהמשך.
+    אפשר גם לקבוע Message-ID בעצמכם, בכותרת `Message-ID`.
+
+    ## Webhooks
+    המערכת שולחת `POST` עם JSON לכתובת שהגדרתם, על כל אירוע:
+    `email.sent`, `email.delivered`, `email.delayed`, `email.bounced`, `email.complained`, `email.failed`,
+    `email.suppressed`, `email.opened`, `email.clicked`, `email.unsubscribed`,
+    `domain.verified`, `domain.failed`, `domain.degraded`, `campaign.paused`, `campaign.finished`, `account.suspended`.
+
+    גוף הבקשה: `{"type": "email.delivered", "created_at": "...", "data": {"message_id": "...", "recipient": "...", "recipient_type": "to", "metadata": {...}}}`.
+
+    כל בקשה חתומה בכותרת `X-Mailer-Signature: t=<unix>,v1=<signature>`.
+    החתימה היא HMAC-SHA256 בקידוד base64url של `<t>.<raw body>`, עם סוד ה-webhook (`whsec_…`):
+
+    ```js
+    import { createHmac, timingSafeEqual } from 'node:crypto';
+    function verify(rawBody, header, secret) {
+      const { t, v1 } = Object.fromEntries(header.split(',').map((p) => p.split('=')));
+      const expected = createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('base64url');
+      return Math.abs(Date.now() / 1000 - Number(t)) < 300 && timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
+    }
+    ```
+    כתובת שלא עונה ב-2xx מקבלת ניסיונות חוזרים: אחרי 30 שניות, 2 דקות, 10 דקות, שעה ו-6 שעות.
+servers:
+  - url: https://mail.retsef.co.il
+security:
+  - bearer: []
+tags:
+  - name: מיילים
+  - name: דומיינים
+  - name: אנשי קשר ורשימות
+  - name: דיוורים
+  - name: תבניות
+  - name: Webhooks
+  - name: חשבון
+  - name: שולחים (פלטפורמה)
+paths:
+  /v1/emails:
+    post:
+      tags: [מיילים]
+      summary: שליחת מייל
+      description: |
+        בלי `cc`/`bcc`, כל כתובת ב-`to` מקבלת מייל נפרד עם מזהה משלה.
+        עם `cc` או `bcc`, נשלח מייל אחד לכולם. ה-BCC לא מופיע בכותרות, ולכל נמען יש מצב משלו.
+        כתובת השולח חייבת להיות בדומיין מאומת של החשבון (חוץ ממפתח בדיקה).
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+          description: מפתח למניעת כפילויות. בקשה חוזרת עם אותו מפתח מחזירה את אותו מייל ולא שולחת שוב.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendEmail' }
+            example:
+              from: { email: office@magnetads.co.il, name: "דנה ממגנט" }
+              to: lead@example.com
+              cc: [manager@example.com]
+              subject: "Re: הצעת מחיר"
+              html: "<div dir=\"rtl\">תודה על הפנייה...</div>"
+              headers: { In-Reply-To: "<abc@example.com>", References: "<abc@example.com>" }
+              attachments: [{ filename: quote.pdf, content: "<base64>", content_type: application/pdf }]
+              metadata: { lead_id: "123" }
+      responses:
+        '202':
+          description: המייל נכנס לתור
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendEmailResponse' }
+        '200': { description: 'בקשה חוזרת עם אותו Idempotency-Key', content: { application/json: { schema: { $ref: '#/components/schemas/SendEmailResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [מיילים]
+      summary: רשימת מיילים שנשלחו (בלי דיוורים)
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: to, schema: { type: string } }
+        - { $ref: '#/components/parameters/limit' }
+        - { $ref: '#/components/parameters/offset' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
+  /v1/emails/{id}:
+    get:
+      tags: [מיילים]
+      summary: מצב מייל, נמענים ואירועים
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/MessageDetail' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/domains:
+    get:
+      tags: [דומיינים]
+      summary: רשימת דומיינים
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Domain' } } } } }
+    post:
+      tags: [דומיינים]
+      summary: הוספת דומיין לאימות
+      description: מחזיר את רשומות ה-DNS שצריך להוסיף. המערכת בודקת אותן לבד כל 10 דקות במשך 72 שעות.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, example: magnetads.co.il } } } } }
+      responses:
+        '201': { description: נוצר, content: { application/json: { schema: { $ref: '#/components/schemas/Domain' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/domains/{id}:
+    get:
+      tags: [דומיינים]
+      summary: פרטי דומיין, רשומות DNS ומצב BIMI
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Domain' } } } }
+    delete:
+      tags: [דומיינים]
+      summary: מחיקת דומיין
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: OK } }
+  /v1/domains/{id}/verify:
+    post:
+      tags: [דומיינים]
+      summary: בדיקת רשומות עכשיו
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Domain' } } } }
+  /v1/domains/{id}/zone:
+    get:
+      tags: [דומיינים]
+      summary: קובץ DNS לייבוא (Cloudflare ועוד)
+      description: קובץ בפורמט BIND עם הרשומות שעדיין חסרות. ב-Cloudflare מייבאים ב-DNS → Records → Import and Export.
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses:
+        '200': { description: קובץ טקסט, content: { text/plain: { schema: { type: string } } } }
+  /v1/domains/{id}/bimi:
+    put:
+      tags: [דומיינים]
+      summary: לוגו שולח (BIMI)
+      description: |
+        מעלים לוגו בפורמט SVG Tiny PS (ריבועי, עם title, בלי סקריפטים או תמונות), ואופציונלית תעודת VMC/CMC בפורמט PEM.
+        המערכת מארחת את הלוגו ומוסיפה רשומת `default._bimi` לקובץ ה-DNS.
+        הלוגו מופיע רק כשמדיניות ה-DMARC היא quarantine או reject. ב-Gmail ובאייפון נדרשת גם תעודה.
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [svg], properties: { svg: { type: string }, certificate: { type: string, nullable: true } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Domain' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [דומיינים]
+      summary: הסרת הלוגו
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: OK } }
+  /v1/contacts:
+    get:
+      tags: [אנשי קשר ורשימות]
+      summary: רשימת אנשי קשר
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: list_id, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/limit' }
+        - { $ref: '#/components/parameters/offset' }
+      responses: { '200': { description: 'OK: { total, items }' } }
+    post:
+      tags: [אנשי קשר ורשימות]
+      summary: הוספה או עדכון של איש קשר
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/ContactInput' } } }
+      responses: { '201': { description: נוצר } }
+  /v1/contacts/import:
+    post:
+      tags: [אנשי קשר ורשימות]
+      summary: ייבוא אנשי קשר (עד 10,000 בבקשה)
+      description: חובה לציין את מקור ההסכמה ולאשר שהנמענים הסכימו לקבל דיוור (חוק התקשורת, סעיף 30א).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contacts, consent_source, consent_declared]
+              properties:
+                contacts: { type: array, items: { type: object, properties: { email: { type: string }, name: { type: string }, attributes: { type: object } } } }
+                list_ids: { type: array, items: { type: string, format: uuid } }
+                consent_source: { type: string, example: "טופס הרשמה באתר" }
+                consent_declared: { type: boolean, enum: [true] }
+      responses: { '200': { description: 'OK: { imported }' } }
+  /v1/lists:
+    get: { tags: [אנשי קשר ורשימות], summary: רשימות תפוצה, responses: { '200': { description: OK } } }
+    post:
+      tags: [אנשי קשר ורשימות]
+      summary: יצירת רשימה
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, double_opt_in: { type: boolean }, from_email: { type: string } } } } } }
+      responses: { '201': { description: נוצר } }
+  /v1/lists/{id}/members:
+    post:
+      tags: [אנשי קשר ורשימות]
+      summary: הוספת אנשי קשר לרשימה
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { contact_ids: { type: array, items: { type: string, format: uuid } } } } } } }
+      responses: { '200': { description: 'OK: { added }' } }
+  /v1/campaigns:
+    get: { tags: [דיוורים], summary: רשימת דיוורים, responses: { '200': { description: OK } } }
+    post:
+      tags: [דיוורים]
+      summary: יצירת דיוור (טיוטה)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, subject, from_name, from_email]
+              properties:
+                name: { type: string }
+                subject: { type: string, description: 'אפשר {{name}}. המילה "פרסומת" מתווספת אוטומטית' }
+                from_name: { type: string }
+                from_email: { type: string }
+                reply_to: { type: string }
+                html: { type: string }
+                template_id: { type: string, format: uuid }
+                list_ids: { type: array, items: { type: string, format: uuid } }
+      responses: { '201': { description: נוצר } }
+  /v1/campaigns/{id}/send:
+    post:
+      tags: [דיוורים]
+      summary: שליחה מיידית או מתוזמנת
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { scheduled_at: { type: string, format: date-time } } } } } }
+      responses: { '200': { description: OK } }
+  /v1/campaigns/{id}/test:
+    post:
+      tags: [דיוורים]
+      summary: שליחת בדיקה (עד 5 כתובות)
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { to: { type: array, items: { type: string } } } } } } }
+      responses: { '200': { description: OK } }
+  /v1/campaigns/{id}/stats:
+    get:
+      tags: [דיוורים]
+      summary: סטטיסטיקה
+      parameters: [{ $ref: '#/components/parameters/id' }]
+      responses: { '200': { description: 'OK: total, sent, delivered, opened, clicked, bounced, complained, unsubscribed' } }
+  /v1/templates:
+    get: { tags: [תבניות], summary: רשימת תבניות, responses: { '200': { description: OK } } }
+    post:
+      tags: [תבניות]
+      summary: יצירת תבנית
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, subject: { type: string }, html: { type: string } } } } } }
+      responses: { '201': { description: נוצר } }
+  /v1/suppressions:
+    get: { tags: [אנשי קשר ורשימות], summary: רשימת חסימה של החשבון, responses: { '200': { description: OK } } }
+    post:
+      tags: [אנשי קשר ורשימות]
+      summary: חסימת כתובת
+      requestBody: { content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string }, reason: { type: string, enum: [unsubscribe, manual] } } } } } }
+      responses: { '201': { description: נוצר } }
+  /v1/webhooks:
+    get: { tags: [Webhooks], summary: רשימת webhooks, responses: { '200': { description: OK } } }
+    post:
+      tags: [Webhooks]
+      summary: הוספת webhook
+      description: התשובה כוללת את `secret` לאימות החתימה. הוא מוצג פעם אחת בלבד.
+      requestBody: { content: { application/json: { schema: { type: object, required: [url], properties: { url: { type: string, example: 'https://example.co.il/hooks/mail' }, events: { type: array, items: { type: string }, description: 'ריק = כל האירועים' } } } } } }
+      responses: { '201': { description: נוצר } }
+  /v1/api-keys:
+    get: { tags: [חשבון], summary: רשימת מפתחות, responses: { '200': { description: OK } } }
+    post:
+      tags: [חשבון]
+      summary: יצירת מפתח
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, mode: { type: string, enum: [live, test], default: live } } } } } }
+      responses: { '201': { description: 'המפתח (key) מוצג פעם אחת בלבד' } }
+  /v1/me:
+    get:
+      tags: [חשבון]
+      summary: החשבון, המכסה ורמת האמון
+      responses: { '200': { description: 'OK: account, usage { today, daily_limit }, trust { level, name, next_step }, test_mode' } }
+  /v1/stats:
+    get:
+      tags: [חשבון]
+      summary: נתוני שליחה יומיים
+      parameters: [{ in: query, name: days, schema: { type: integer, default: 14, maximum: 90 } }]
+      responses: { '200': { description: OK } }
+  /v1/senders:
+    get: { tags: ['שולחים (פלטפורמה)'], summary: רשימת שולחים, responses: { '200': { description: OK } } }
+    post:
+      tags: ['שולחים (פלטפורמה)']
+      summary: יצירת שולח (לקוח של חשבון פלטפורמה)
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, external_id: { type: string }, default_reply_to: { type: string } } } } } }
+      responses: { '201': { description: נוצר } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, description: 'mk_live_… או mk_test_…' }
+  parameters:
+    id: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    limit: { in: query, name: limit, schema: { type: integer, default: 50, maximum: 500 } }
+    offset: { in: query, name: offset, schema: { type: integer, default: 0 } }
+  responses:
+    Error:
+      description: שגיאה
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: domain_not_verified, message: 'הדומיין magnetads.co.il לא מאומת עבור השולח הזה' } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: object, properties: { code: { type: string }, message: { type: string }, details: {} } }
+    Address:
+      oneOf:
+        - { type: string, format: email }
+        - { type: array, items: { type: string, format: email } }
+    SendEmail:
+      type: object
+      required: [from, to, subject]
+      properties:
+        from:
+          oneOf:
+            - { type: string, format: email }
+            - { type: object, required: [email], properties: { email: { type: string, format: email }, name: { type: string } } }
+          description: כל כתובת בדומיין מאומת
+        to: { $ref: '#/components/schemas/Address' }
+        cc: { $ref: '#/components/schemas/Address' }
+        bcc: { $ref: '#/components/schemas/Address' }
+        reply_to: { type: string, format: email }
+        subject: { type: string }
+        html: { type: string }
+        text: { type: string, description: 'אם חסר, נוצר אוטומטית מה-html' }
+        type: { type: string, enum: [transactional, marketing], default: transactional, description: 'marketing מוסיף קישור הסרה ומעקב' }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: 'Message-ID, In-Reply-To, References, וכל כותרת שמתחילה ב-X-'
+        attachments:
+          type: array
+          maxItems: 10
+          items: { type: object, required: [filename, content], properties: { filename: { type: string }, content: { type: string, description: base64 }, content_type: { type: string } } }
+        metadata: { type: object, description: 'חוזר בכל webhook של המייל' }
+        scheduled_at: { type: string, format: date-time }
+        sender_id: { type: string, format: uuid, description: 'חשבון פלטפורמה בלבד' }
+        fallback: { type: string, enum: [reject, platform], description: 'חשבון פלטפורמה בלבד' }
+    SendEmailResponse:
+      type: object
+      properties:
+        duplicate: { type: boolean }
+        test: { type: boolean }
+        used_fallback: { type: boolean }
+        from_email: { type: string }
+        warnings: { type: array, items: { type: string } }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              to: { type: string }
+              cc: { type: array, items: { type: string } }
+              bcc: { type: array, items: { type: string } }
+              message_id_header: { type: string, example: '<5f0c…@magnetads.co.il>' }
+              status: { type: string, enum: [queued, suppressed] }
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        to_email: { type: string }
+        cc: { type: array, items: { type: string } }
+        bcc: { type: array, items: { type: string } }
+        from_email: { type: string }
+        subject: { type: string }
+        status: { type: string, enum: [queued, sending, sent, delivered, bounced, complained, failed, suppressed] }
+        message_id_header: { type: string }
+        test: { type: boolean }
+        metadata: { type: object }
+        opened_at: { type: string, format: date-time, nullable: true }
+        clicked_at: { type: string, format: date-time, nullable: true }
+        sent_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    MessageDetail:
+      allOf:
+        - $ref: '#/components/schemas/Message'
+        - type: object
+          properties:
+            recipients:
+              type: array
+              description: במייל עם cc/bcc, מצב לכל נמען
+              items: { type: object, properties: { email: { type: string }, kind: { type: string, enum: [to, cc, bcc] }, status: { type: string }, detail: { type: string } } }
+            events:
+              type: array
+              items: { type: object, properties: { type: { type: string }, data: { type: object }, created_at: { type: string } } }
+    DnsRecord:
+      type: object
+      properties:
+        type: { type: string, enum: [CNAME, TXT, MX] }
+        name: { type: string }
+        value: { type: string }
+        priority: { type: integer }
+        purpose: { type: string, enum: [dkim, mail_from_mx, mail_from_spf, dmarc, bimi] }
+        status: { type: string, enum: [pending, verified, failed] }
+    Domain:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [pending, verified, failed, degraded] }
+        checks: { type: object, properties: { dkim: { type: string }, mail_from: { type: string }, dmarc: { type: string } } }
+        records: { type: array, items: { $ref: '#/components/schemas/DnsRecord' } }
+        bimi:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            logo_url: { type: string }
+            certificate: { type: boolean }
+            dmarc: { type: object, properties: { policy: { type: string }, pct: { type: integer }, ready: { type: boolean } } }
+            shows_in: { type: array, items: { type: string, enum: [yahoo, aol, gmail, apple] } }
+    ContactInput:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string }
+        name: { type: string }
+        attributes: { type: object }
+        consent_source: { type: string }
+        list_ids: { type: array, items: { type: string, format: uuid } }

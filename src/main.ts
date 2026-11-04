@@ -48,6 +48,8 @@ export async function buildServer() {
   await app.register(fastifyStatic, { root: publicDir, prefix: '/app/' });
   app.get('/', (_req, reply) => reply.redirect('/app/', 302));
   app.get('/app', (_req, reply) => reply.redirect('/app/', 302));
+  app.get('/docs', (_req, reply) => reply.redirect('/app/docs.html', 302));
+  app.get('/openapi.yaml', (_req, reply) => reply.redirect('/app/openapi.yaml', 302));
   return app;
 }
 

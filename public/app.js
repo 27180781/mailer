@@ -45,6 +45,9 @@
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     pointer: '<path d="m4 4 7 16 2.5-6.5L20 11z"/>',
     bounce: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+    book: '<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5z"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
   };
   const icon = (name, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
   document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon, el.classList.contains('brand-mark') ? 20 : 18); el.style.color = el.classList.contains('brand-mark') ? '#fff' : ''; });
@@ -129,6 +132,7 @@
     senders: ['שולחים', senders, () => me.account.type === 'platform', 'building', 'שליחה'],
     keys: ['מפתחות API', keys, null, 'key', 'פיתוח'],
     webhooks: ['Webhooks', webhooks, null, 'zap', 'פיתוח'],
+    docs: ['תיעוד API', null, null, 'book', 'פיתוח'],
     settings: ['הגדרות חשבון', settings, null, 'settings', 'חשבון'],
     admin: ['ניהול חשבונות', admin, () => me.user?.is_superadmin, 'shield', 'חשבון'],
   };
@@ -138,6 +142,7 @@
       .filter(([, r]) => !r[2] || r[2]())
       .map(([k, r]) => {
         const head = r[4] !== group ? `<div class="nav-group">${(group = r[4])}</div>` : '';
+        if (k === 'docs') return `${head}<a href="/docs" target="_blank" rel="noopener">${icon(r[3])}<span>${esc(r[0])}</span></a>`;
         return `${head}<a href="#/${k}" class="${k === current ? 'active' : ''}">${icon(r[3])}<span>${esc(r[0])}</span></a>`;
       })
       .join('');
@@ -148,7 +153,7 @@
   $('#shell').addEventListener('click', (e) => { if (e.target.id === 'shell') $('#shell').classList.remove('menu-open'); });
   async function route() {
     const [name, ...rest] = (location.hash.replace(/^#\//, '').split('?')[0] || 'dashboard').split('/');
-    const r = routes[name] || routes.dashboard;
+    const r = (routes[name] && routes[name][1]) ? routes[name] : routes.dashboard;
     renderNav(routes[name] ? name : 'dashboard');
     $('#view').innerHTML = '<div class="loading"><div class="spinner"></div>טוען…</div>';
     window.scrollTo(0, 0);
@@ -242,7 +247,8 @@
           <h3 style="margin:0 0 4px;font-size:16px">מכסה יומית</h3>
           <div class="stat" style="box-shadow:none"><div class="n">${me.usage.today.toLocaleString('he-IL')} <small style="font-size:15px;font-weight:500">/ ${me.usage.daily_limit.toLocaleString('he-IL')}</small></div></div>
           <div class="meter"><i style="width:${used}%"></i></div>
-          <p class="muted" style="margin:10px 0 0;font-size:13px">מתאפס כל יום בחצות. ${me.account.status === 'pending' ? 'אחרי אישור החשבון המכסה עולה.' : ''}</p>
+          <p class="muted" style="margin:10px 0 0;font-size:13px">מתאפס כל יום בחצות · רמת חשבון: <b>${esc(me.trust.name)}</b></p>
+          ${me.trust.next_step ? `<p style="margin:8px 0 0;font-size:13px;padding:10px 12px;border-radius:10px;background:var(--brand-soft)">${esc(me.trust.next_step)}</p>` : ''}
           <div style="display:flex;gap:16px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line-2)">
             <div><div style="font-size:20px;font-weight:800">${c.contacts.toLocaleString('he-IL')}</div><small>אנשי קשר פעילים</small></div>
             <div><div style="font-size:20px;font-weight:800">${c.verified_domains}/${c.domains}</div><small>דומיינים מאומתים</small></div>
@@ -257,7 +263,7 @@
         : empty('send', 'עוד אין דיוורים', 'יוצרים דיוור מתבנית מוכנה, בוחרים רשימה ושולחים.', '<a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a>')}`;
   }
 
-  const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC' };
+  const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC', bimi: 'לוגו (BIMI)' };
   function recordsTable(d) {
     const pending = d.records.some((r) => r.status !== 'verified');
     return `${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>הדרך הקלה: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
@@ -268,13 +274,51 @@
         <td>${badge(r.status || 'pending')}</td></tr>`).join('')}</table></div>
       <p class="muted">או ידנית: מוסיפים את הרשומות אצל ספק ה-DNS של הדומיין (למשל Cloudflare, Box, GoDaddy). בחלק מהספקים כותבים בשדה השם רק את החלק שלפני הדומיין. הבדיקה רצה אוטומטית כל 10 דקות, למשך 72 שעות.</p>`;
   }
+  const check = (ok, text, hint = '') => `<div class="step ${ok ? 'done' : ''}" style="align-items:center"><span class="num">${ok ? icon('check', 14) : icon('x', 14)}</span><div><b>${text}</b>${hint ? `<small class="muted">${hint}</small>` : ''}</div></div>`;
+  function bimiCard(d) {
+    const b = d.bimi || {};
+    const upload = `<div class="row" style="margin-top:12px;align-items:flex-end">
+        <label style="flex:1;margin:0">קובץ לוגו (SVG Tiny PS, ריבועי)<input type="file" id="bimi-svg" accept=".svg,image/svg+xml"></label>
+        <label style="flex:1;margin:0">תעודת VMC/CMC <small>(לא חובה, ל-Gmail ולאייפון)</small><input type="file" id="bimi-cert" accept=".pem,.crt,.cer,text/plain"></label>
+        <button class="primary" id="bimi-save">${icon('upload')}${b.enabled ? 'החלפה' : 'העלאה'}</button></div><p class="error" id="bimi-err"></p>`;
+    if (!b.enabled) {
+      return `<h2>לוגו השולח (BIMI)</h2><div class="card"><div class="row" style="align-items:flex-start;gap:16px">
+        <div class="ico" style="width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand)">${icon('image', 22)}</div>
+        <div style="flex:1"><b>הלוגו של העסק ליד המייל בתיבת הדואר</b><p class="muted" style="margin:4px 0 0">ב-Yahoo וב-AOL מספיק לוגו ומדיניות DMARC מחמירה. ב-Gmail ובאייפון נדרשת גם תעודת VMC או CMC בתשלום.</p></div></div>${upload}</div>`;
+    }
+    const pol = b.dmarc || {};
+    const where = (b.shows_in || []).map((x) => ({ yahoo: 'Yahoo', aol: 'AOL', gmail: 'Gmail', apple: 'Apple Mail' })[x]).join(', ');
+    return `<h2>לוגו השולח (BIMI)</h2><div class="card"><div class="row" style="align-items:flex-start;gap:20px">
+      <img src="${esc(b.logo_url)}" alt="לוגו" style="width:88px;height:88px;border-radius:50%;border:1px solid var(--line);background:#fff;object-fit:contain">
+      <div style="flex:1;min-width:240px"><div class="steps">
+        ${check(true, 'הלוגו תקין ומאוחסן', `<span class="ltr">${esc(b.logo_url)}</span>`)}
+        ${check(pol.ready, `מדיניות DMARC: ${esc(pol.policy || 'none')}${pol.pct !== 100 ? ` (${pol.pct}%)` : ''}`, pol.ready ? '' : pol.record ? `צריך p=quarantine או p=reject ב-100%. הרשומה היום ב-<span class="ltr">${esc(pol.location)}</span>: <span class="ltr">${esc(pol.record)}</span>` : 'עוד אין רשומת DMARC. קובץ ה-DNS להורדה כולל רשומה מחמירה שמתאימה ללוגו')}
+        ${check(b.dns_record?.status === 'verified', 'רשומת BIMI ב-DNS', b.dns_record?.status === 'verified' ? '' : 'נמצאת בקובץ ה-DNS להורדה, או בטבלת הרשומות למעלה')}
+        ${check(b.certificate, b.certificate ? 'תעודה הועלתה' : 'בלי תעודה', b.certificate ? 'הלוגו יכול להופיע גם ב-Gmail ובאייפון' : 'הלוגו יופיע רק ב-Yahoo וב-AOL')}
+      </div>
+      <p style="margin:14px 0 0">${where ? `<span class="badge good">מוכן</span> הלוגו יופיע ב: ${esc(where)}` : '<span class="badge warn">עוד לא מוכן</span> כשכל הסעיפים יסומנו, הלוגו יתחיל להופיע (ספקי הדואר מתעדכנים תוך כמה ימים)'}</p></div></div>
+      ${upload}<button class="link danger" id="bimi-del" style="margin-top:4px">הסרת הלוגו</button></div>`;
+  }
+  function bindBimi(d) {
+    const save = $('#bimi-save');
+    if (save) save.onclick = async () => {
+      const f = $('#bimi-svg').files[0], c = $('#bimi-cert').files[0];
+      if (!f) { $('#bimi-err').textContent = 'צריך לבחור קובץ SVG'; return; }
+      save.disabled = true;
+      try { await api('PUT', `/v1/domains/${d.id}/bimi`, { svg: await f.text(), certificate: c ? await c.text() : null }); toast('הלוגו נשמר'); domains(d.id); }
+      catch (err) { $('#bimi-err').textContent = err.message; save.disabled = false; }
+    };
+    const del = $('#bimi-del');
+    if (del) del.onclick = async () => { if (confirm('להסיר את הלוגו?')) { await api('DELETE', `/v1/domains/${d.id}/bimi`); domains(d.id); } };
+  }
   async function domains(id) {
     if (id) {
       const d = await api('GET', `/v1/domains/${id}`);
       $('#view').innerHTML = `<div class="row between"><h1 class="ltr" style="text-align:right">${esc(d.name)} ${badge(d.status)}</h1>
         <div class="row"><button class="primary" id="verify">בדיקה עכשיו</button><button class="danger" id="del">מחיקה</button></div></div>
         <p>${d.status === 'verified' ? 'הדומיין מאומת ואפשר לשלוח ממנו מכל כתובת.' : 'כדי לאמת, צריך להוסיף את הרשומות הבאות ב-DNS של הדומיין:'}</p>
-        ${recordsTable(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
+        ${recordsTable(d)}${bimiCard(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
+      bindBimi(d);
       $('#verify').onclick = async (e) => {
         const b = e.currentTarget; b.disabled = true; b.textContent = 'בודק…';
         try { const r = await api('POST', `/v1/domains/${id}/verify`); toast(r.status === 'verified' ? 'הדומיין מאומת' : 'נבדק. חלק מהרשומות עדיין לא נמצאו'); domains(id); }
@@ -321,7 +365,7 @@
     const list = await api('GET', '/v1/emails?limit=100');
     $('#view').innerHTML = `<h1>מיילים שנשלחו</h1><p class="muted">מיילים בודדים שנשלחו דרך ה-API (לא כולל דיוורים).</p>
       <div class="table-wrap"><table><tr><th>נמען</th><th>נושא</th><th>שולח</th><th>מצב</th><th>זמן</th></tr>
-      ${list.map((m) => `<tr><td class="ltr">${esc(m.to_email)}</td><td>${esc(m.subject)}</td><td class="ltr">${esc(m.from_email)}${m.used_fallback ? ' <span class="badge warn">גיבוי</span>' : ''}</td><td>${badge(m.status)}${m.last_error ? `<br><small>${esc(m.last_error)}</small>` : ''}</td><td>${fmtDate(m.created_at)}</td></tr>`).join('')}</table></div>`;
+      ${list.map((m) => `<tr><td class="ltr">${esc(m.to_email)}${m.cc?.length || m.bcc?.length ? ` <span class="badge info">+${(m.cc?.length || 0) + (m.bcc?.length || 0)}</span>` : ''}${m.test ? ' <span class="badge">בדיקה</span>' : ''}</td><td>${esc(m.subject)}</td><td class="ltr">${esc(m.from_email)}${m.used_fallback ? ' <span class="badge warn">גיבוי</span>' : ''}</td><td>${badge(m.status)}${m.last_error ? `<br><small>${esc(m.last_error)}</small>` : ''}</td><td>${fmtDate(m.created_at)}</td></tr>`).join('')}</table></div>`;
   }
 
   function parseCsv(text) {
@@ -540,10 +584,13 @@
   async function keys() {
     const list = await api('GET', '/v1/api-keys');
     $('#view').innerHTML = `<h1>מפתחות API</h1><p class="muted">שולחים את המפתח בכותרת <span class="ltr">Authorization: Bearer &lt;key&gt;</span>. המפתח מוצג פעם אחת בלבד.</p>
-      <form id="add" class="card row"><input name="name" placeholder="שם המפתח, למשל: שרת ייצור" required style="flex:1"><button class="primary">יצירת מפתח</button></form>
+      <form id="add" class="card row"><input name="name" placeholder="שם המפתח, למשל: שרת ייצור" required style="flex:1">
+        <select name="mode" style="width:auto;margin:0"><option value="live">מפתח אמיתי</option><option value="test">מפתח בדיקה</option></select>
+        <button class="primary">${icon('plus')}יצירת מפתח</button></form>
+      <div class="card" style="margin-bottom:16px;background:var(--surface-2)"><b>מפתח בדיקה (mk_test_…)</b><p class="muted" style="margin:4px 0 0">עובר את כל התהליך, מחזיר מזהים ושולח webhooks, אבל לא שולח מיילים באמת. אפשר להתחיל בו לפני שהדומיין מאומת. כתובת שמתחילה ב-<span class="ltr">bounce</span> מדמה חזרה, <span class="ltr">complaint</span> מדמה תלונה ו-<span class="ltr">delay</span> מדמה עיכוב.</p></div>
       <div id="newkey"></div>
-      <div class="table-wrap" style="margin-top:16px"><table><tr><th>שם</th><th>תחילית</th><th>שימוש אחרון</th><th></th></tr>
-      ${list.map((k) => `<tr><td>${esc(k.name)}</td><td class="ltr">${esc(k.prefix)}…</td><td>${fmtDate(k.last_used_at) || '—'}</td><td><button class="danger" data-revoke="${k.id}">ביטול</button></td></tr>`).join('')}</table></div>`;
+      <div class="table-wrap" style="margin-top:16px"><table><tr><th>שם</th><th>סוג</th><th>תחילית</th><th>שימוש אחרון</th><th></th></tr>
+      ${list.map((k) => `<tr><td>${esc(k.name)}</td><td>${k.mode === 'test' ? '<span class="badge warn">בדיקה</span>' : '<span class="badge good">אמיתי</span>'}</td><td class="ltr">${esc(k.prefix)}…</td><td>${fmtDate(k.last_used_at) || '—'}</td><td><button class="danger" data-revoke="${k.id}">ביטול</button></td></tr>`).join('')}</table></div>`;
     $('#add').onsubmit = async (e) => {
       e.preventDefault();
       const k = await api('POST', '/v1/api-keys', formData(e.target));
@@ -595,8 +642,8 @@
 
   async function admin() {
     const list = await api('GET', '/admin/accounts');
-    $('#view').innerHTML = `<h1>ניהול חשבונות</h1><div class="table-wrap"><table><tr><th>חשבון</th><th>סוג</th><th>מצב</th><th>מכסה יומית</th><th>30 יום: נשלחו / חזרו / תלונות</th><th></th></tr>
-      ${list.map((a) => `<tr><td>${esc(a.name)}<br><small class="ltr">${esc(a.contact_email)}</small></td><td>${a.type === 'platform' ? 'פלטפורמה' : 'רגיל'}</td><td>${badge(a.status)}</td><td>${a.daily_limit.toLocaleString('he-IL')}</td>
+    $('#view').innerHTML = `<h1>ניהול חשבונות</h1><div class="table-wrap"><table><tr><th>חשבון</th><th>סוג</th><th>מצב</th><th>רמה</th><th>מכסה יומית</th><th>30 יום: נשלחו / חזרו / תלונות</th><th></th></tr>
+      ${list.map((a) => `<tr><td>${esc(a.name)}<br><small class="ltr">${esc(a.contact_email)}</small></td><td>${a.type === 'platform' ? 'פלטפורמה' : 'רגיל'}</td><td>${badge(a.status)}${a.paused_reason ? `<br><small class="muted">${esc(a.paused_reason)}</small>` : ''}</td><td>${['חדש', 'מאומת', 'מבוסס', 'ותיק', 'מוביל'][a.trust_level] || a.trust_level}${a.trust_manual ? ' <small class="muted">(ידני)</small>' : ''}</td><td>${a.daily_limit.toLocaleString('he-IL')}</td>
         <td>${a.sent_30d} / ${a.bounced_30d} / ${a.complained_30d}</td><td><button data-edit="${a.id}">עריכה</button></td></tr>`).join('')}</table></div>`;
     document.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
       const a = list.find((x) => x.id === b.dataset.edit);
@@ -604,9 +651,16 @@
         <label>מצב<select name="status">${['pending', 'active', 'suspended'].map((s) => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${STATUS[s][0]}</option>`).join('')}</select></label>
         <label>סוג<select name="type"><option value="standard" ${a.type === 'standard' ? 'selected' : ''}>רגיל</option><option value="platform" ${a.type === 'platform' ? 'selected' : ''}>פלטפורמה</option></select></label>
         <label>מכסה יומית<input name="daily_limit" type="number" value="${a.daily_limit}"></label>
+        <label><input type="checkbox" name="auto_trust" ${a.trust_manual ? '' : 'checked'}> הגדלה אוטומטית של המכסה לפי איכות השליחה</label>
         <label><input type="checkbox" name="can_use_reserved_domains" ${a.can_use_reserved_domains ? 'checked' : ''}> מותר לאמת תת-דומיינים של דומיינים שמורים (למשל mail.retsef.co.il)</label>
         <div class="row"><button class="primary">שמירה</button><button type="button" data-close>ביטול</button></div></form>`);
-      $('#af').onsubmit = async (e) => { e.preventDefault(); const f = formData(e.target); await api('PATCH', `/admin/accounts/${a.id}`, { status: f.status, type: f.type, daily_limit: Number(f.daily_limit), can_use_reserved_domains: e.target.can_use_reserved_domains.checked }); closeModal(); admin(); };
+      $('#af').onsubmit = async (e) => {
+        e.preventDefault();
+        const f = formData(e.target);
+        const body = { status: f.status, type: f.type, can_use_reserved_domains: e.target.can_use_reserved_domains.checked, auto_trust: e.target.auto_trust.checked };
+        if (Number(f.daily_limit) !== a.daily_limit) body.daily_limit = Number(f.daily_limit);
+        try { await api('PATCH', `/admin/accounts/${a.id}`, body); closeModal(); admin(); } catch (err) { toast(err.message, 'error'); }
+      };
     }));
   }
 

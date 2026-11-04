@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>תיעוד API · מערכת דיוור</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; }
+    .redoc-markdown, [class*="redoc-markdown"] p, [class*="redoc-markdown"] li, [class*="redoc-markdown"] h1, [class*="redoc-markdown"] h2 { direction: rtl; text-align: right; }
+    .redoc-markdown pre, .redoc-markdown code, pre, code { direction: ltr; text-align: left; }
+  </style>
+</head>
+<body>
+  <div id="redoc"></div>
+  <script src="https://cdn.jsdelivr.net/npm/redoc@2.1.5/bundles/redoc.standalone.js"></script>
+  <script>
+    Redoc.init('/app/openapi.yaml', {
+      hideDownloadButton: false,
+      expandResponses: '200,201,202',
+      theme: {
+        colors: { primary: { main: '#4f46e5' } },
+        typography: { fontFamily: 'Heebo, Arial, sans-serif', headings: { fontFamily: 'Heebo, Arial, sans-serif' } },
+        sidebar: { backgroundColor: '#f5f6fb' },
+        rightPanel: { backgroundColor: '#0f1226' },
+      },
+    }, document.getElementById('redoc'));
+  </script>
+</body>
+</html>
