@@ -428,3 +428,14 @@ test('Cloudflare: adds missing records, keeps an existing DMARC, never stores th
     cf.fetch = real;
   }
 });
+
+test('"Name <email>" address format (Resend compatible)', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const r = await api('POST', '/v1/emails', u.body.token, { from: 'דנה ממגנט <dana@docs.retzef.test>', to: ['Lead Person <lead2@client.test>'], reply_to: ['Sales <sales@docs.retzef.test>'], subject: 'x', text: 'x' });
+  assert.equal(r.status, 202);
+  assert.equal(r.body.from_email, 'dana@docs.retzef.test');
+  const [m] = await query(`SELECT from_name, to_email, reply_to FROM messages WHERE id = $1`, [r.body.messages[0].id]);
+  assert.equal(m.from_name, 'דנה ממגנט');
+  assert.equal(m.to_email, 'lead2@client.test');
+  assert.equal(m.reply_to, 'sales@docs.retzef.test');
+});

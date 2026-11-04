@@ -35,7 +35,7 @@ export const config = {
   // daily quota when the AWS account is shared with another system (e.g. Retzef).
   dailySendCap: Number(env('DAILY_SEND_CAP', '0')),
   newAccountDailyLimit: Number(env('NEW_ACCOUNT_DAILY_LIMIT', '200')),
-  apiRateLimitPerMinute: Number(env('API_RATE_LIMIT_PER_MINUTE', '120')),
+  apiRateLimitPerMinute: Number(env('API_RATE_LIMIT_PER_MINUTE', '600')),
   // Domains whose SES identity is managed outside this system (same AWS account), e.g. retsef.co.il.
   // Nobody may add or delete them here; subdomains only for accounts with can_use_reserved_domains.
   reservedDomains: (process.env.RESERVED_DOMAINS || '').split(',').map((s) => s.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean),

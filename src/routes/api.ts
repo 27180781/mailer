@@ -15,6 +15,16 @@ import { runAutoTrust, trustInfo } from '../services/trust.js';
 import { applyRecords } from '../services/cloudflare.js';
 
 const email = z.string().trim().toLowerCase().email('כתובת מייל לא תקינה');
+/** Accepts "Name <a@b.co>" (as Resend and most libraries do) as well as a bare address. */
+const NAMED = /^\s*"?([^"<]*?)"?\s*<([^<>\s]+@[^<>\s]+)>\s*$/;
+const namedAddress = z.string().transform((v, ctx) => {
+  const m = v.match(NAMED);
+  const parsed = m ? { name: m[1].trim() || null, email: m[2] } : { name: null as string | null, email: v };
+  const ok = email.safeParse(parsed.email);
+  if (!ok.success) { ctx.addIssue({ code: 'custom', message: 'כתובת מייל לא תקינה' }); return z.NEVER; }
+  return { name: parsed.name, email: ok.data };
+});
+const looseEmail = namedAddress.transform((a) => a.email);
 const uuid = z.string().uuid('מזהה לא תקין');
 const page = z.object({ limit: z.coerce.number().int().min(1).max(500).default(50), offset: z.coerce.number().int().min(0).default(0) });
 
@@ -29,12 +39,12 @@ const MAX_ATTACHMENTS_BYTES = 10 * 1024 * 1024;
 const sendSchema = z
   .object({
     sender_id: uuid.nullish(),
-    from: z.union([email.transform((e) => ({ email: e, name: null as string | null })), z.object({ email, name: z.string().max(120).nullish() })]),
+    from: z.union([namedAddress, z.object({ email, name: z.string().max(120).nullish() })]),
     fallback: z.enum(['platform', 'reject']).default('reject'),
-    reply_to: email.nullish(),
-    to: z.union([email.transform((e) => [e]), z.array(email).min(1).max(50)]),
-    cc: z.union([email.transform((e) => [e]), z.array(email).max(49)]).default([]),
-    bcc: z.union([email.transform((e) => [e]), z.array(email).max(49)]).default([]),
+    reply_to: z.union([looseEmail, z.array(looseEmail).max(1).transform((a) => a[0])]).nullish(),
+    to: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).min(1).max(50)]),
+    cc: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).max(49)]).default([]),
+    bcc: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).max(49)]).default([]),
     subject: z.string().min(1).max(998),
     html: z.string().max(2_000_000).nullish(),
     text: z.string().max(1_000_000).nullish(),
