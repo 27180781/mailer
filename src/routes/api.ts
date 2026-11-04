@@ -12,6 +12,7 @@ import { campaignStats } from '../services/campaigns.js';
 import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
 import { suppress } from '../services/suppression.js';
 import { runAutoTrust, trustInfo } from '../services/trust.js';
+import { backupConfig, backupConfigured, backupStatus, listBackups, runBackup } from '../services/backup.js';
 import { applyRecords } from '../services/cloudflare.js';
 import { applyParams, applyUrl, discover, publicKeyPublished, publicKeyRecords, templates, templateSupported, DC_PROVIDER_ID } from '../services/domainConnect.js';
 
@@ -800,6 +801,22 @@ export async function apiRoutes(app: FastifyInstance) {
         public_key_records: await publicKeyRecords(),
         public_key_published: await publicKeyPublished(),
       };
+    });
+    r.get('/admin/backups', async (req) => {
+      requireSuperAdmin(req);
+      const c = backupConfig();
+      let backups: any[] = [];
+      let listError: string | null = null;
+      try {
+        backups = await listBackups();
+      } catch (err: any) {
+        listError = err.message;
+      }
+      return { configured: backupConfigured(), bucket: c.bucket || null, hour: c.hour, retention_days: c.retentionDays, last: await backupStatus(), backups, list_error: listError };
+    });
+    r.post('/admin/backups/run', async (req) => {
+      requireSuperAdmin(req);
+      return runBackup('manual');
     });
     r.post('/admin/trust/run', async (req) => {
       requireSuperAdmin(req);

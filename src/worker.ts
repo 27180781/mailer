@@ -5,6 +5,7 @@ import { startDueCampaigns, superviseCampaigns } from './services/campaigns.js';
 import { checkDueDomains } from './services/domains.js';
 import { deliverWebhooks } from './services/webhooks.js';
 import { runAutoTrust } from './services/trust.js';
+import { maybeRunScheduledBackup } from './services/backup.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let running = true;
@@ -89,6 +90,7 @@ export function startWorker() {
   void every(60_000, 'domains', checkDueDomains);
   void every(2_000, 'webhooks', deliverWebhooks);
   void every(10 * 60_000, 'trust', runAutoTrust);
+  void every(5 * 60_000, 'backup', maybeRunScheduledBackup);
   // Messages stuck in "sending" after a crash go back to the queue.
   void every(60_000, 'recover', () =>
     query(`UPDATE messages SET status = 'queued' WHERE status = 'sending' AND next_attempt_at < now() - interval '10 minutes'`),

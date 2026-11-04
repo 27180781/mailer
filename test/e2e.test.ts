@@ -4,6 +4,8 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const dbUrl = process.env.TEST_DATABASE_URL;
 process.env.DATABASE_URL = dbUrl;
@@ -552,4 +554,56 @@ test('API: ad_label for marketing mail, Content-Language for Hebrew', async () =
   while ((await sendBatch(50)) > 0);
   const raw = sent().slice(before).find((m) => m.to === 'adl3@client.test')!.raw.toString();
   assert.match(raw, /^Content-Language: he$/m);
+});
+
+const pgBin = (() => {
+  const { readdirSync, existsSync } = require('node:fs') as typeof import('node:fs');
+  try {
+    const v = readdirSync('/usr/lib/postgresql').map(Number).filter(Boolean).sort((a, b) => b - a);
+    for (const n of v) if (existsSync(`/usr/lib/postgresql/${n}/bin/pg_dump`)) return `/usr/lib/postgresql/${n}/bin`;
+  } catch {}
+  return null;
+})();
+
+test('backup: encrypted dump uploads, decrypts to a restorable archive, daily schedule, retention', { skip: !pgBin && 'pg_dump not installed' }, async () => {
+  const b = await import('../src/services/backup.js');
+  const { gunzipSync } = await import('node:zlib');
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync } = await import('node:fs');
+  const files = new Map<string, { data: Buffer; modified: Date }>();
+  files.set('backups/2020-01-01/old.dump.gz.mlbk', { data: Buffer.from('old'), modified: new Date('2020-01-01') });
+  const real = b.backupDeps.store;
+  b.backupDeps.store = () => ({
+    async upload(key, body) { const chunks: Buffer[] = []; for await (const c of body) chunks.push(Buffer.from(c)); files.set(key, { data: Buffer.concat(chunks), modified: new Date() }); },
+    async list() { return [...files].map(([key, v]) => ({ key, size: v.data.length, modified: v.modified })); },
+    async remove(key) { files.delete(key); },
+    async download(key) { const { Readable } = await import('node:stream'); return Readable.from([files.get(key)!.data]); },
+  });
+  Object.assign(process.env, {
+    BACKUP_S3_ENDPOINT: 'https://example.r2.cloudflarestorage.com', BACKUP_S3_BUCKET: 'mailer-backups',
+    BACKUP_S3_ACCESS_KEY_ID: 'x', BACKUP_S3_SECRET_ACCESS_KEY: 'y', BACKUP_PASSPHRASE: 'correct horse battery staple',
+    PG_DUMP_PATH: `${pgBin}/pg_dump`, BACKUP_HOUR: '0',
+  });
+  try {
+    const status = await b.runBackup('manual');
+    assert.equal(status.ok, true);
+    assert.equal(status.pruned, 1, 'backups older than the retention period are removed');
+    const enc = files.get(status.key)!.data;
+    assert.equal(enc.subarray(0, 5).toString(), 'MLBK1');
+    assert.doesNotMatch(enc.toString('latin1'), /CREATE TABLE|contacts/, 'stored encrypted');
+    const dump = gunzipSync(await b.fetchBackup(status.key));
+    const tmp = `${(await import('node:os')).tmpdir()}/mailer-test-${Date.now()}.dump`;
+    writeFileSync(tmp, dump);
+    const toc = execFileSync(`${pgBin}/pg_restore`, ['--list', tmp]).toString();
+    assert.match(toc, /TABLE public messages/);
+    assert.match(toc, /TABLE DATA public contacts/);
+    assert.throws(() => b.decryptBackup(enc, 'wrong passphrase'));
+    // Already backed up today → the scheduler does nothing
+    const count = files.size;
+    await b.maybeRunScheduledBackup();
+    assert.equal(files.size, count);
+  } finally {
+    b.backupDeps.store = real;
+    for (const k of ['BACKUP_S3_ENDPOINT', 'BACKUP_S3_BUCKET', 'BACKUP_S3_ACCESS_KEY_ID', 'BACKUP_S3_SECRET_ACCESS_KEY', 'BACKUP_PASSPHRASE', 'PG_DUMP_PATH', 'BACKUP_HOUR']) delete process.env[k];
+  }
 });

@@ -65,6 +65,7 @@
 | `SUPER_ADMIN_EMAILS` | מיילים שמקבלים הרשאת מנהל-על בהרשמה |
 | `RESERVED_DOMAINS` | דומיינים שה-identity שלהם מנוהל מחוץ למערכת, באותו חשבון AWS (למשל `retsef.co.il`). אי אפשר להוסיף או למחוק אותם, ותת-דומיינים שלהם מותרים רק לחשבון שקיבל הרשאה |
 | `ROLE` | `all`, `web` או `worker` |
+| `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_PASSPHRASE` | גיבוי יומי מוצפן לדלי R2/S3. ראו [docs/backup.md](docs/backup.md) |
 
 ## API
 

@@ -7,6 +7,8 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
+# pg_dump for the daily backup (newer client dumps older servers too)
+RUN apk add --no-cache postgresql17-client || apk add --no-cache postgresql16-client
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000
 COPY --from=build /app/node_modules ./node_modules

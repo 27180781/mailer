@@ -731,6 +731,32 @@
     };
   }
 
+  const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(b / 1024))}KB`);
+  async function adminBackups() {
+    const box = $('#backup-admin');
+    if (!box) return;
+    let b;
+    try { b = await api('GET', '/admin/backups'); } catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    if (!b.configured) {
+      box.innerHTML = `<div class="banner">${icon('alert')}<span>הגיבוי לא מוגדר עדיין. צריך להוסיף ב-CapRover את משתני <span class="ltr">BACKUP_S3_*</span> ו-<span class="ltr">BACKUP_PASSPHRASE</span>. ההוראות ב-<span class="ltr">docs/backup.md</span>.</span></div>`;
+      return;
+    }
+    const last = b.last;
+    box.innerHTML = `<div class="card">
+      <div class="row between"><div>
+        ${last ? (last.ok ? `<span class="badge good">הגיבוי האחרון הצליח</span> ${fmtDate(last.at)} · ${fmtSize(last.bytes)} · ${last.seconds} שניות` : `<span class="badge bad">הגיבוי האחרון נכשל</span> ${fmtDate(last.at)}<br><small class="muted">${esc(last.error)}</small>`) : '<span class="badge warn">עוד לא בוצע גיבוי</span>'}
+        <p class="muted" style="margin:6px 0 0;font-size:13px">גיבוי מוצפן כל יום אחרי ${String(b.hour).padStart(2, '0')}:00 לדלי <span class="ltr">${esc(b.bucket)}</span>, נשמר ${b.retention_days} ימים.</p></div>
+        <button class="primary" id="backup-now">${icon('upload')}גיבוי עכשיו</button></div>
+      ${b.list_error ? `<p class="error">לא הצלחתי לקרוא את הדלי: ${esc(b.list_error)}</p>` : ''}
+      ${b.backups.length ? `<div class="table-wrap" style="margin-top:14px"><table><tr><th>תאריך</th><th>גודל</th><th>קובץ</th></tr>
+        ${b.backups.slice(0, 10).map((x) => `<tr><td>${fmtDate(x.modified)}</td><td>${fmtSize(x.size)}</td><td class="ltr">${esc(x.key)}</td></tr>`).join('')}</table></div>` : ''}
+    </div>`;
+    $('#backup-now').onclick = async (e) => {
+      const btn = e.currentTarget; btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> מגבה…';
+      try { const r = await api('POST', '/admin/backups/run'); toast(`הגיבוי הושלם (${fmtSize(r.bytes)})`); adminBackups(); }
+      catch (err) { toast(err.message, 'error'); adminBackups(); }
+    };
+  }
   async function adminDomainConnect() {
     const box = $('#dc-admin');
     if (!box) return;
@@ -763,9 +789,11 @@
   async function admin() {
     const list = await api('GET', '/admin/accounts');
     setTimeout(adminDomainConnect, 0);
+    setTimeout(adminBackups, 0);
     $('#view').innerHTML = `<h1>ניהול חשבונות</h1><div class="table-wrap"><table><tr><th>חשבון</th><th>סוג</th><th>מצב</th><th>רמה</th><th>מכסה יומית</th><th>30 יום: נשלחו / חזרו / תלונות</th><th></th></tr>
       ${list.map((a) => `<tr><td>${esc(a.name)}<br><small class="ltr">${esc(a.contact_email)}</small></td><td>${a.type === 'platform' ? 'פלטפורמה' : 'רגיל'}</td><td>${badge(a.status)}${a.paused_reason ? `<br><small class="muted">${esc(a.paused_reason)}</small>` : ''}</td><td>${['חדש', 'מאומת', 'מבוסס', 'ותיק', 'מוביל'][a.trust_level] || a.trust_level}${a.trust_manual ? ' <small class="muted">(ידני)</small>' : ''}</td><td>${a.daily_limit.toLocaleString('he-IL')}</td>
         <td>${a.sent_30d} / ${a.bounced_30d} / ${a.complained_30d}</td><td><button data-edit="${a.id}">עריכה</button></td></tr>`).join('')}</table></div>
+      <h2>גיבויים</h2><div id="backup-admin"><div class="loading"><div class="spinner"></div>בודק…</div></div>
       <h2>חיבור בלחיצה לספקי DNS (Domain Connect)</h2><div id="dc-admin"><div class="loading"><div class="spinner"></div>בודק…</div></div>`;
     document.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
       const a = list.find((x) => x.id === b.dataset.edit);

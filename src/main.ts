@@ -60,6 +60,30 @@ async function main() {
     await pool.end();
     return;
   }
+  if (cmd === 'backup') {
+    const { runBackup } = await import('./services/backup.js');
+    console.log(await runBackup('manual'));
+    await pool.end();
+    return;
+  }
+  if (cmd === 'backup-list') {
+    const { listBackups } = await import('./services/backup.js');
+    for (const b of await listBackups()) console.log(`${b.modified.toISOString()}  ${String(b.size).padStart(12)}  ${b.key}`);
+    await pool.end();
+    return;
+  }
+  if (cmd === 'backup-download') {
+    // node dist/main.js backup-download <key> <file.dump>  →  then: pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" file.dump
+    const { fetchBackup } = await import('./services/backup.js');
+    const { gunzipSync } = await import('node:zlib');
+    const { writeFileSync } = await import('node:fs');
+    const [key, out] = process.argv.slice(3);
+    if (!key || !out) throw new Error('usage: backup-download <key> <file.dump>');
+    writeFileSync(out, gunzipSync(await fetchBackup(key)));
+    console.log(`saved ${out}`);
+    await pool.end();
+    return;
+  }
   if (config.role === 'web' || config.role === 'all') {
     const app = await buildServer();
     await app.listen({ port: config.port, host: '0.0.0.0' });
