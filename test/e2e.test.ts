@@ -607,3 +607,24 @@ test('backup: encrypted dump uploads, decrypts to a restorable archive, daily sc
     for (const k of ['BACKUP_S3_ENDPOINT', 'BACKUP_S3_BUCKET', 'BACKUP_S3_ACCESS_KEY_ID', 'BACKUP_S3_SECRET_ACCESS_KEY', 'BACKUP_PASSPHRASE', 'PG_DUMP_PATH', 'BACKUP_HOUR']) delete process.env[k];
   }
 });
+
+test('SES: the From header keeps the display name (no FromEmailAddress override); webhook carries from_name', async () => {
+  const { SesProvider } = await import('../src/providers/ses.js');
+  const { buildRaw } = await import('../src/services/render.js');
+  const ses = new SesProvider() as any;
+  let input: any = null;
+  ses.client = { send: async (cmd: any) => { input = cmd.input; return { MessageId: 'ses-1' }; } };
+  const raw = await buildRaw({ messageId: 'm1', domain: 'magnetads.test', fromEmail: 'info@magnetads.test', fromName: 'MagnetAds', to: 'lead@x.test', subject: 'כן?', text: 'כן?' });
+  await ses.send({ id: 'm1', from: 'info@magnetads.test', to: 'lead@x.test', recipients: ['lead@x.test'], raw, domain: 'magnetads.test' });
+  assert.equal(input.FromEmailAddress, undefined, 'SES must take the sender from the raw From header');
+  assert.match(Buffer.from(input.Content.Raw.Data).toString(), /^From: MagnetAds <info@magnetads\.test>/m);
+
+  // email.sent webhook includes the name
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  await api('POST', '/v1/webhooks', u.body.token, { url: 'https://hooks.example.test/mail', events: ['email.sent'] });
+  const r = await api('POST', '/v1/emails', u.body.token, { from: 'MagnetAds <info@docs.retzef.test>', to: 'named@client.test', subject: 'x', text: 'x' });
+  while ((await sendBatch(50)) > 0);
+  const [d] = await query(`SELECT payload FROM webhook_deliveries WHERE event_type = 'email.sent' AND payload->'data'->>'message_id' = $1`, [r.body.messages[0].id]);
+  assert.equal(d.payload.data.from, 'info@docs.retzef.test');
+  assert.equal(d.payload.data.from_name, 'MagnetAds');
+});

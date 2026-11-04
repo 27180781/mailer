@@ -423,7 +423,7 @@ await sendEmail({
 
 | אירוע SES (במסמך שלכם) | האירוע אצלנו | שדות נוספים ב-`data` |
 | --- | --- | --- |
-| Send | `email.sent` | `recipients`, `from`, `message_id_header` |
+| Send | `email.sent` | `recipients`, `from` (כתובת), `from_name` (שם השולח), `message_id_header` |
 | Delivery | `email.delivered` | |
 | DeliveryDelay | `email.delayed` | `detail` |
 | Bounce | `email.bounced` | `bounce_type` (`hard` או `soft`), `detail` |

@@ -302,7 +302,7 @@ export async function processMessage(msg: any) {
     // Test key: nothing leaves the system. Delivery events are simulated from the recipient address.
     await query(`UPDATE messages SET status = 'sent', provider = 'test', provider_message_id = $2, sent_at = now(), last_error = NULL, attachments = NULL WHERE id = $1`, [msg.id, `test-${msg.id}`]);
     await query(`UPDATE message_recipients SET status = 'sent', updated_at = now() WHERE message_id = $1 AND status = 'queued'`, [msg.id]);
-    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, message_id_header: msg.message_id_header, metadata: msg.metadata, test: true, size: raw.length });
+    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, from_name: fromName ?? null, message_id_header: msg.message_id_header, metadata: msg.metadata, test: true, size: raw.length });
     await simulateTestEvents(msg, recipients);
     return;
   }
@@ -325,7 +325,7 @@ export async function processMessage(msg: any) {
       [msg.id, provider.name, out.providerMessageId],
     );
     await query(`UPDATE message_recipients SET status = 'sent', updated_at = now() WHERE message_id = $1 AND status = 'queued'`, [msg.id]);
-    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, used_fallback: msg.used_fallback, message_id_header: msg.message_id_header, metadata: msg.metadata });
+    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, from_name: fromName ?? null, used_fallback: msg.used_fallback, message_id_header: msg.message_id_header, metadata: msg.metadata });
   } catch (err: any) {
     const temporary = err instanceof ProviderError ? err.temporary : true;
     const wait = RETRY_SECONDS[msg.attempts - 1];

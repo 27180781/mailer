@@ -79,7 +79,8 @@ export class SesProvider implements EmailProvider {
     try {
       const out = await this.client.send(
         new SendEmailCommand({
-          FromEmailAddress: email.from,
+          // No FromEmailAddress: with raw content SES would put the bare address in the From header and drop
+          // the display name. SES reads the sender (and checks the identity) from the From header we built.
           Destination: { ToAddresses: email.recipients },
           Content: { Raw: { Data: email.raw } },
           ConfigurationSetName: config.ses.configurationSet,
