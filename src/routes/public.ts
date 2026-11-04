@@ -10,6 +10,7 @@ import { unsubscribeContact } from '../services/suppression.js';
 import { emitEvent } from '../services/webhooks.js';
 import { clickSigValid, escapeHtml } from '../services/render.js';
 import { enqueueEmail } from '../services/send.js';
+import { checkDomain } from '../services/domains.js';
 
 const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
@@ -50,6 +51,23 @@ async function doUnsubscribe(msg: any) {
 
 export async function publicRoutes(app: FastifyInstance) {
   app.get('/health', async () => ({ ok: true }));
+
+  // Domain Connect: the DNS provider sends the customer back here after approving (or cancelling)
+  app.get('/dc/callback', async (req, reply) => {
+    const q = req.query as { state?: string; error?: string };
+    const id = q.state ? verifyToken(q.state) : null;
+    if (!id || !/^[0-9a-f-]{36}$/.test(id)) return page(reply, 'הקישור לא תקין', '', 400);
+    const row = await one('SELECT * FROM domains WHERE id = $1', [id]);
+    if (!row) return page(reply, 'הדומיין לא נמצא', '', 404);
+    if (!q.error) {
+      try {
+        await checkDomain(row);
+      } catch (err) {
+        req.log.warn({ err }, 'domain check after domain connect failed');
+      }
+    }
+    return reply.redirect(`/app/#/domains/${id}?dc=${q.error ? encodeURIComponent(q.error) : 'ok'}`, 302);
+  });
 
   // BIMI assets: mailbox providers fetch the logo and certificate from here
   app.get('/bimi/:domain/logo.svg', async (req, reply) => {

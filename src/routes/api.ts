@@ -13,6 +13,7 @@ import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
 import { suppress } from '../services/suppression.js';
 import { runAutoTrust, trustInfo } from '../services/trust.js';
 import { applyRecords } from '../services/cloudflare.js';
+import { applyParams, applyUrl, discover, publicKeyPublished, publicKeyRecords, templates, templateSupported, DC_PROVIDER_ID } from '../services/domainConnect.js';
 
 const email = z.string().trim().toLowerCase().email('כתובת מייל לא תקינה');
 /** Accepts "Name <a@b.co>" (as Resend and most libraries do) as well as a bare address. */
@@ -320,6 +321,33 @@ export async function apiRoutes(app: FastifyInstance) {
       if (checked.status === 'verified' && req.auth.account.trust_level === 0) await runAutoTrust();
       const fresh = await one('SELECT * FROM domains WHERE id = $1', [id]);
       return { zone: out.zone, results: out.results, domain: { ...publicDomain(fresh), bimi: await bimiStatus(fresh) } };
+    });
+
+    /** Domain Connect: is one-click setup available at this domain's DNS provider? */
+    r.get('/v1/domains/:id/domain-connect', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      const plan = applyParams(row);
+      if (!plan) return { available: false, reason: 'nothing_to_add' };
+      const found = await discover(row.name);
+      if (!found) return { available: false, reason: 'provider_not_supported' };
+      const supported = await templateSupported(found.settings, plan.serviceId);
+      return {
+        available: supported,
+        provider: found.settings.providerDisplayName || found.settings.providerName,
+        zone: found.zone,
+        reason: supported ? null : 'template_pending_approval',
+      };
+    });
+    /** Returns the signed URL that takes the customer to their DNS provider to approve the records. */
+    r.post('/v1/domains/:id/domain-connect', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      const found = await discover(row.name);
+      if (!found) throw new ApiError(400, 'domain_connect_unavailable', 'ספק ה-DNS של הדומיין לא תומך בחיבור בלחיצה. אפשר להשתמש במפתח API או בקובץ DNS');
+      const url = await applyUrl(row, found.zone, found.settings);
+      if (!url) throw new ApiError(400, 'nothing_to_add', 'כל הרשומות כבר מאומתות');
+      return { url, provider: found.settings.providerDisplayName || found.settings.providerName };
     });
 
     /** BIMI: upload the sender logo (SVG Tiny PS) and optionally a VMC/CMC certificate. */
@@ -751,6 +779,24 @@ export async function apiRoutes(app: FastifyInstance) {
            (SELECT count(*)::int FROM messages m WHERE m.account_id = a.id AND m.status = 'complained' AND m.created_at > now() - interval '30 days') AS complained_30d
          FROM accounts a ORDER BY created_at DESC`,
       );
+    });
+    /** Domain Connect registration status, for the operator. */
+    r.get('/admin/domain-connect', async (req) => {
+      requireSuperAdmin(req);
+      const cf = await discover(DC_PROVIDER_ID);
+      const list = templates();
+      return {
+        provider_id: DC_PROVIDER_ID,
+        templates: await Promise.all(list.map(async (t) => ({
+          file: `${DC_PROVIDER_ID}.${t.serviceId}.json`,
+          service_id: t.serviceId,
+          name: t.serviceName,
+          cloudflare_supported: cf ? await templateSupported(cf.settings, t.serviceId) : false,
+          json: t,
+        }))),
+        public_key_records: await publicKeyRecords(),
+        public_key_published: await publicKeyPublished(),
+      };
     });
     r.post('/admin/trust/run', async (req) => {
       requireSuperAdmin(req);

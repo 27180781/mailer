@@ -439,3 +439,76 @@ test('"Name <email>" address format (Resend compatible)', async () => {
   assert.equal(m.to_email, 'lead2@client.test');
   assert.equal(m.reply_to, 'sales@docs.retzef.test');
 });
+
+test('Domain Connect: discovery, signed apply URL with the right groups, callback', async () => {
+  const dc = await import('../src/services/domainConnect.js');
+  const { createVerify, createPublicKey } = await import('node:crypto');
+  const realTxt = dnsLookup.resolveTxt;
+  const realFetch = dc.dcHttp.fetch;
+  dnsLookup.resolveTxt = (async (name: string) => {
+    if (name === '_domainconnect.dcshop.test') return [['api.dnsprovider.test/v2dc']];
+    return (realTxt as any)(name);
+  }) as any;
+  let supported = false;
+  dc.dcHttp.fetch = (async (url: string) => {
+    if (url === 'https://api.dnsprovider.test/v2dc/v2/dcshop.test/settings')
+      return new Response(JSON.stringify({ providerId: 'dnsprovider.test', providerName: 'dnsprovider', providerDisplayName: 'DNS Provider', urlSyncUX: 'https://dash.dnsprovider.test/dc', urlAPI: 'https://api.dnsprovider.test/v2dc' }));
+    if (/\/v2\/domainTemplates\/providers\/retsef\.co\.il\/services\/mailer(-nodmarc|-bimi)?$/.test(url)) return new Response('{}', { status: supported ? 200 : 404 });
+    return new Response('not found', { status: 404 });
+  }) as any;
+  try {
+    const u = await api('POST', '/v1/auth/signup', undefined, { email: 'owner@dcshop.test', password: 'very-secret-7', name: 'חנות', account_name: 'חנות DC' });
+    // log provider returns a single DKIM record; give this domain three, like SES
+    const d = await api('POST', '/v1/domains', u.body.token, { name: 'mail.dcshop.test' });
+    const records = [
+      ...['aaa', 'bbb', 'ccc'].map((t) => ({ type: 'CNAME', name: `${t}._domainkey.mail.dcshop.test`, value: `${t}.dkim.il-central-1.amazonses.com`, purpose: 'dkim', status: 'pending' })),
+      { type: 'MX', name: 'bounce.mail.dcshop.test', value: 'feedback-smtp.il-central-1.amazonses.com', priority: 10, purpose: 'mail_from_mx', status: 'pending' },
+      { type: 'TXT', name: 'bounce.mail.dcshop.test', value: 'v=spf1 include:amazonses.com ~all', purpose: 'mail_from_spf', status: 'pending' },
+      { type: 'TXT', name: '_dmarc.dcshop.test', value: 'v=DMARC1; p=none', purpose: 'dmarc', status: 'verified' },
+    ];
+    await query(`UPDATE domains SET records = $2, status = 'pending' WHERE id = $1`, [d.body.id, JSON.stringify(records)]);
+
+    let info = await api('GET', `/v1/domains/${d.body.id}/domain-connect`, u.body.token);
+    assert.equal(info.body.available, false);
+    assert.equal(info.body.reason, 'template_pending_approval');
+    supported = true;
+    (dc as any).templateSupported.cache?.clear?.();
+    const r = await api('POST', `/v1/domains/${d.body.id}/domain-connect`, u.body.token);
+    assert.equal(r.status, 200);
+    const url = new URL(r.body.url);
+    assert.equal(url.origin + url.pathname, 'https://dash.dnsprovider.test/dc/v2/domainTemplates/providers/retsef.co.il/services/mailer-nodmarc/apply', 'domain already has DMARC → template without DMARC');
+    const p = url.searchParams;
+    assert.equal(p.get('domain'), 'dcshop.test');
+    assert.equal(p.get('host'), 'mail');
+    assert.equal(p.get('dmarc'), null, 'existing DMARC is not re-applied');
+    assert.equal(p.get('dkim1'), 'aaa');
+    assert.equal(p.get('dkimhost'), 'dkim.il-central-1.amazonses.com');
+    assert.equal(p.get('mailfrom'), 'bounce');
+    assert.equal(p.get('key'), '_dck1');
+    // Signature verifies against the published public key
+    const qs = r.body.url.split('?')[1].split('&key=')[0];
+    const der = (await dc.publicKeyRecords()).map((x) => x.value.split(',d=')[1]).join('');
+    const pub = createPublicKey({ key: Buffer.from(der, 'base64'), format: 'der', type: 'spki' });
+    const v = createVerify('RSA-SHA256');
+    v.update(qs);
+    assert.ok(v.verify(pub, p.get('sig')!, 'base64'), 'signature valid');
+
+    // Template records produce the same names as our records
+    const all = dc.templates();
+    assert.deepEqual(all.map((x: any) => x.serviceId), ['mailer', 'mailer-nodmarc', 'mailer-bimi']);
+    assert.ok(all[1].records.some((x: any) => x.host === '%dkim1%._domainkey' && x.pointsTo === '%dkim1%.%dkimhost%'));
+    assert.ok(all[1].records.some((x: any) => x.type === 'SPFM'), 'SPF merged, never a second record');
+    assert.ok(!all[1].records.some((x: any) => x.host === '_dmarc'));
+    assert.ok(r.body.url.endsWith(`&sig=${encodeURIComponent(p.get('sig')!)}`), 'signature is the last parameter');
+
+    // Provider sends the customer back
+    const back = await app.inject({ method: 'GET', url: `/dc/callback?state=${encodeURIComponent(p.get('state')!)}` });
+    assert.equal(back.statusCode, 302);
+    assert.equal(back.headers.location, `/app/#/domains/${d.body.id}?dc=ok`);
+    const forged = await app.inject({ method: 'GET', url: `/dc/callback?state=${d.body.id}.forged` });
+    assert.equal(forged.statusCode, 400);
+  } finally {
+    dnsLookup.resolveTxt = realTxt;
+    dc.dcHttp.fetch = realFetch;
+  }
+});

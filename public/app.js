@@ -285,6 +285,23 @@
       </details>
       <div id="cf-result"></div></div>`;
   }
+  /** One-click setup through Domain Connect, shown only when the customer's DNS provider supports our template. */
+  async function loadDomainConnect(d) {
+    const slot = $('#dc-slot');
+    if (!slot) return;
+    let info;
+    try { info = await api('GET', `/v1/domains/${d.id}/domain-connect`); } catch { return; }
+    if (!info.available || !$('#dc-slot')) return;
+    slot.innerHTML = `<div class="card" style="margin-bottom:12px;border:1.5px solid var(--brand);background:linear-gradient(135deg,var(--brand-soft),var(--surface))">
+      <div class="row between"><div><b style="font-size:16px">חיבור ל-${esc(info.provider)} בלחיצה אחת</b>
+        <p class="muted" style="margin:4px 0 0">עוברים ל-${esc(info.provider)}, מאשרים את הרשומות, וחוזרים לכאן מאומתים. בלי מפתחות ובלי העתקה.</p></div>
+        <button class="primary" id="dc-go" style="padding:12px 22px">${icon('zap')}חיבור ל-${esc(info.provider)}</button></div></div>`;
+    $('#dc-go').onclick = async (e) => {
+      e.currentTarget.disabled = true;
+      try { const r = await api('POST', `/v1/domains/${d.id}/domain-connect`); location.href = r.url; }
+      catch (err) { toast(err.message, 'error'); e.currentTarget.disabled = false; }
+    };
+  }
   function bindCloudflare(d) {
     const run = async (btn, body) => {
       btn.disabled = true; const label = btn.innerHTML; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> מוסיף…';
@@ -303,7 +320,7 @@
   }
   function recordsTable(d, withCloudflare = false) {
     const pending = d.records.some((r) => r.status !== 'verified');
-    return `${withCloudflare ? cloudflareCard(d) : ''}${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>או: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
+    return `${withCloudflare && pending ? '<div id="dc-slot"></div>' : ''}${withCloudflare ? cloudflareCard(d) : ''}${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>או: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
       <button class="primary" data-zone="${d.id}" data-name="${esc(d.name)}">הורדת קובץ DNS</button></div>` : ''}<div class="table-wrap"><table><tr><th>מטרה</th><th>סוג</th><th>שם (Host)</th><th>ערך</th><th>מצב</th></tr>
       ${d.records.map((r) => `<tr><td>${PURPOSE[r.purpose] || r.purpose}</td><td>${r.type}</td>
         <td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td>
@@ -357,6 +374,9 @@
         ${recordsTable(d, true)}${bimiCard(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
       bindBimi(d);
       bindCloudflare(d);
+      loadDomainConnect(d);
+      const dc = new URLSearchParams(location.hash.split('?')[1] || '').get('dc');
+      if (dc) { toast(dc === 'ok' ? 'הרשומות אושרו אצל ספק ה-DNS. האימות מתעדכן תוך כמה דקות' : 'החיבור בוטל או נכשל אצל ספק ה-DNS', dc === 'ok' ? 'ok' : 'error'); history.replaceState(null, '', `#/domains/${d.id}`); }
       $('#verify').onclick = async (e) => {
         const b = e.currentTarget; b.disabled = true; b.textContent = 'בודק…';
         try { const r = await api('POST', `/v1/domains/${id}/verify`); toast(r.status === 'verified' ? 'הדומיין מאומת' : 'נבדק. חלק מהרשומות עדיין לא נמצאו'); domains(id); }
@@ -678,11 +698,33 @@
     };
   }
 
+  async function adminDomainConnect() {
+    const box = $('#dc-admin');
+    if (!box) return;
+    let s;
+    try { s = await api('GET', '/admin/domain-connect'); } catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    box.innerHTML = `<div class="card"><p class="muted" style="margin-top:0">חיבור בלחיצה אצל ספקי DNS (Cloudflare, GoDaddy ועוד) דורש שהתבנית שלנו תירשם אצלם. ההוראות המלאות במאגר: <span class="ltr">docs/domain-connect.md</span></p>
+      <div class="steps">
+        ${check(s.public_key_published, 'מפתח החתימה מפורסם ב-DNS', s.public_key_published ? '' : 'מוסיפים ב-Cloudflare של retsef.co.il את רשומות ה-TXT שלמטה')}
+        ${s.templates.map((t) => check(t.cloudflare_supported, `${esc(t.name)}: ${t.cloudflare_supported ? 'אושרה ב-Cloudflare' : 'ממתינה לאישור Cloudflare'}`, `<span class="ltr">${esc(t.file)}</span>`)).join('')}
+      </div>
+      <h3 style="font-size:15px;margin:18px 0 8px">רשומות המפתח הציבורי (TXT)</h3>
+      <div class="table-wrap"><table><tr><th>שם</th><th>ערך</th></tr>${s.public_key_records.map((r) => `<tr><td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td><td class="ltr">${esc(r.value)} <button class="copy" data-copy="${esc(r.value)}">העתקה</button></td></tr>`).join('')}</table></div>
+      <div class="row" style="margin-top:14px">${s.templates.map((t, i) => `<button data-tpl="${i}">${icon('download')}${esc(t.file)}</button>`).join('')}</div></div>`;
+    box.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = () => {
+      const t = s.templates[Number(b.dataset.tpl)];
+      const url = URL.createObjectURL(new Blob([JSON.stringify(t.json, null, 2) + '\n'], { type: 'application/json' }));
+      Object.assign(document.createElement('a'), { href: url, download: t.file }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }));
+  }
   async function admin() {
     const list = await api('GET', '/admin/accounts');
+    setTimeout(adminDomainConnect, 0);
     $('#view').innerHTML = `<h1>ניהול חשבונות</h1><div class="table-wrap"><table><tr><th>חשבון</th><th>סוג</th><th>מצב</th><th>רמה</th><th>מכסה יומית</th><th>30 יום: נשלחו / חזרו / תלונות</th><th></th></tr>
       ${list.map((a) => `<tr><td>${esc(a.name)}<br><small class="ltr">${esc(a.contact_email)}</small></td><td>${a.type === 'platform' ? 'פלטפורמה' : 'רגיל'}</td><td>${badge(a.status)}${a.paused_reason ? `<br><small class="muted">${esc(a.paused_reason)}</small>` : ''}</td><td>${['חדש', 'מאומת', 'מבוסס', 'ותיק', 'מוביל'][a.trust_level] || a.trust_level}${a.trust_manual ? ' <small class="muted">(ידני)</small>' : ''}</td><td>${a.daily_limit.toLocaleString('he-IL')}</td>
-        <td>${a.sent_30d} / ${a.bounced_30d} / ${a.complained_30d}</td><td><button data-edit="${a.id}">עריכה</button></td></tr>`).join('')}</table></div>`;
+        <td>${a.sent_30d} / ${a.bounced_30d} / ${a.complained_30d}</td><td><button data-edit="${a.id}">עריכה</button></td></tr>`).join('')}</table></div>
+      <h2>חיבור בלחיצה לספקי DNS (Domain Connect)</h2><div id="dc-admin"><div class="loading"><div class="spinner"></div>בודק…</div></div>`;
     document.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
       const a = list.find((x) => x.id === b.dataset.edit);
       modal(`<h2>${esc(a.name)}</h2><form id="af">
