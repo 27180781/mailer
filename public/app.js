@@ -264,9 +264,46 @@
   }
 
   const PURPOSE = { dkim: 'חתימת DKIM', mail_from_mx: 'כתובת החזרות (MX)', mail_from_spf: 'SPF', dmarc: 'מדיניות DMARC', bimi: 'לוגו (BIMI)' };
-  function recordsTable(d) {
+  const CF_ACTION = { created: ['נוספה', 'good'], updated: ['עודכנה', 'good'], unchanged: ['כבר הייתה תקינה', 'good'], skipped: ['דילגנו', ''], error: ['שגיאה', 'bad'] };
+  function cloudflareCard(d) {
+    if (!d.records.some((r) => r.status !== 'verified')) return '';
+    return `<div class="card" style="margin-bottom:12px">
+      <div class="row" style="align-items:flex-start;gap:14px">
+        <div style="width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:#fff4e6;color:#f38020;flex:none">${icon('zap', 22)}</div>
+        <div style="flex:1;min-width:220px"><b>הדרך הכי קלה: חיבור אוטומטי ל-Cloudflare</b>
+          <p class="muted" style="margin:4px 0 0">המערכת מוסיפה את כל הרשומות בעצמה ומאמתת מיד. המפתח משמש רק לפעולה הזו ולא נשמר.</p></div></div>
+      ${me.cloudflare_operator ? `<div class="row" style="margin-top:14px"><button class="primary" id="cf-operator">${icon('zap')}הוספה אוטומטית עם החיבור של המערכת</button><small class="muted">לדומיינים שלך ב-Cloudflare</small></div>` : ''}
+      <details style="margin-top:12px" ${me.cloudflare_operator ? '' : 'open'}><summary style="cursor:pointer;font-weight:600">${me.cloudflare_operator ? 'או עם מפתח של חשבון Cloudflare אחר' : 'איך יוצרים מפתח (דקה אחת)'}</summary>
+        <ol style="margin:10px 0;padding-inline-start:20px;line-height:1.9;color:var(--ink-2)">
+          <li>נכנסים ל-<a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener">Cloudflare ← My Profile ← API Tokens</a> ← <b>Create Token</b>.</li>
+          <li>בוחרים בתבנית <b>Edit zone DNS</b> ← Use template.</li>
+          <li>ב-Zone Resources בוחרים <b>Specific zone</b> ← הדומיין <span class="ltr">${esc(d.name.split('.').slice(-3).join('.'))}</span> (או הדומיין הראשי שלו).</li>
+          <li>Continue to summary ← <b>Create Token</b> ← מעתיקים ומדביקים כאן.</li>
+        </ol>
+        <div class="row"><input id="cf-token" type="password" placeholder="מפתח API של Cloudflare" class="ltr" style="flex:1;min-width:220px;margin:0" autocomplete="off">
+          <button class="primary" id="cf-apply">${icon('zap')}הוספת הרשומות</button></div>
+      </details>
+      <div id="cf-result"></div></div>`;
+  }
+  function bindCloudflare(d) {
+    const run = async (btn, body) => {
+      btn.disabled = true; const label = btn.innerHTML; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> מוסיף…';
+      try {
+        const r = await api('POST', `/v1/domains/${d.id}/cloudflare`, body);
+        $('#cf-result').innerHTML = `<div class="table-wrap" style="margin-top:14px"><table><tr><th>רשומה</th><th>סוג</th><th>תוצאה</th></tr>
+          ${r.results.map((x) => `<tr><td class="ltr">${esc(x.name)}</td><td>${x.type}</td><td><span class="badge ${CF_ACTION[x.action][1]}">${CF_ACTION[x.action][0]}</span>${x.detail && x.action !== 'unchanged' ? `<br><small class="muted">${esc(x.detail)}</small>` : ''}</td></tr>`).join('')}</table></div>
+          <p style="margin:10px 0 0">${r.domain.status === 'verified' ? '<span class="badge good">הדומיין מאומת</span>' : 'הרשומות נוספו. האימות מתעדכן תוך כמה דקות, והמערכת ממשיכה לבדוק לבד.'}</p>`;
+        toast(r.domain.status === 'verified' ? 'הדומיין מאומת' : 'הרשומות נוספו ל-Cloudflare');
+        if (r.domain.status === 'verified') setTimeout(() => domains(d.id), 1800);
+      } catch (err) { toast(err.message, 'error'); }
+      finally { btn.disabled = false; btn.innerHTML = label; if ($('#cf-token')) $('#cf-token').value = ''; }
+    };
+    const op = $('#cf-operator'); if (op) op.onclick = () => run(op, { use_operator: true });
+    const ap = $('#cf-apply'); if (ap) ap.onclick = () => { const t = $('#cf-token').value.trim(); if (!t) return toast('צריך להדביק מפתח', 'error'); run(ap, { token: t }); };
+  }
+  function recordsTable(d, withCloudflare = false) {
     const pending = d.records.some((r) => r.status !== 'verified');
-    return `${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>הדרך הקלה: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
+    return `${withCloudflare ? cloudflareCard(d) : ''}${pending ? `<div class="card row between" style="margin-bottom:12px"><div><b>או: ייבוא קובץ</b><br><small class="muted">ב-Cloudflare: DNS ← Records ← Import and Export ← Import. בלי לסמן "Proxy imported DNS records".</small></div>
       <button class="primary" data-zone="${d.id}" data-name="${esc(d.name)}">הורדת קובץ DNS</button></div>` : ''}<div class="table-wrap"><table><tr><th>מטרה</th><th>סוג</th><th>שם (Host)</th><th>ערך</th><th>מצב</th></tr>
       ${d.records.map((r) => `<tr><td>${PURPOSE[r.purpose] || r.purpose}</td><td>${r.type}</td>
         <td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td>
@@ -317,8 +354,9 @@
       $('#view').innerHTML = `<div class="row between"><h1 class="ltr" style="text-align:right">${esc(d.name)} ${badge(d.status)}</h1>
         <div class="row"><button class="primary" id="verify">בדיקה עכשיו</button><button class="danger" id="del">מחיקה</button></div></div>
         <p>${d.status === 'verified' ? 'הדומיין מאומת ואפשר לשלוח ממנו מכל כתובת.' : 'כדי לאמת, צריך להוסיף את הרשומות הבאות ב-DNS של הדומיין:'}</p>
-        ${recordsTable(d)}${bimiCard(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
+        ${recordsTable(d, true)}${bimiCard(d)}<p><a href="#/domains">חזרה לרשימה</a></p>`;
       bindBimi(d);
+      bindCloudflare(d);
       $('#verify').onclick = async (e) => {
         const b = e.currentTarget; b.disabled = true; b.textContent = 'בודק…';
         try { const r = await api('POST', `/v1/domains/${id}/verify`); toast(r.status === 'verified' ? 'הדומיין מאומת' : 'נבדק. חלק מהרשומות עדיין לא נמצאו'); domains(id); }

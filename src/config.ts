@@ -39,6 +39,9 @@ export const config = {
   // Domains whose SES identity is managed outside this system (same AWS account), e.g. retsef.co.il.
   // Nobody may add or delete them here; subdomains only for accounts with can_use_reserved_domains.
   reservedDomains: (process.env.RESERVED_DOMAINS || '').split(',').map((s) => s.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean),
+  // Operator's own Cloudflare token (Zone · DNS · Edit). Used only for super admin accounts and
+  // accounts allowed to use reserved domains, never for regular customers.
+  cloudflareToken: process.env.CLOUDFLARE_API_TOKEN || '',
   // Comma separated emails that become super admins on signup
   superAdmins: (process.env.SUPER_ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 };

@@ -12,6 +12,7 @@ import { campaignStats } from '../services/campaigns.js';
 import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
 import { suppress } from '../services/suppression.js';
 import { runAutoTrust, trustInfo } from '../services/trust.js';
+import { applyRecords } from '../services/cloudflare.js';
 
 const email = z.string().trim().toLowerCase().email('כתובת מייל לא תקינה');
 const uuid = z.string().uuid('מזהה לא תקין');
@@ -59,6 +60,14 @@ async function owned(table: string, id: string, accountId: string, what: string)
   const row = await one(`SELECT * FROM ${table} WHERE id = $1 AND account_id = $2`, [id, accountId]);
   if (!row) throw notFound(what);
   return row;
+}
+
+/** The operator's Cloudflare token is offered only to the operator's own accounts. */
+async function canUseOperatorCloudflare(req: any) {
+  if (!config.cloudflareToken) return false;
+  if (req.auth.user?.is_superadmin || req.auth.account.can_use_reserved_domains) return true;
+  const admin = await one('SELECT 1 FROM users WHERE account_id = $1 AND is_superadmin', [req.auth.account.id]);
+  return !!admin;
 }
 
 export async function apiRoutes(app: FastifyInstance) {
@@ -119,6 +128,7 @@ export async function apiRoutes(app: FastifyInstance) {
       user: req.auth.user && { id: req.auth.user.id, email: req.auth.user.email, name: req.auth.user.name, is_superadmin: req.auth.user.is_superadmin },
       usage: { today: await sentToday(req.auth.account.id), daily_limit: req.auth.account.daily_limit },
       trust: await trustInfo(req.auth.account),
+      cloudflare_operator: await canUseOperatorCloudflare(req),
       test_mode: req.auth.testMode,
     }));
 
@@ -278,6 +288,28 @@ export async function apiRoutes(app: FastifyInstance) {
       const { id } = z.object({ id: uuid }).parse(req.params);
       const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
       return { ...publicDomain(row), bimi: await bimiStatus(row) };
+    });
+
+    /**
+     * Adds the domain's records to Cloudflare DNS automatically, then verifies.
+     * The customer's token is used for this request only and never stored.
+     */
+    r.post('/v1/domains/:id/cloudflare', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const row = await owned('domains', id, req.auth.account.id, 'הדומיין');
+      const b = z.object({ token: z.string().trim().min(20).max(200).optional(), use_operator: z.boolean().optional() }).parse(req.body ?? {});
+      let token = b.token;
+      if (!token && b.use_operator) {
+        if (!(await canUseOperatorCloudflare(req))) throw new ApiError(403, 'forbidden', 'החיבור של המערכת ל-Cloudflare זמין רק לדומיינים של המפעיל');
+        token = config.cloudflareToken;
+      }
+      if (!token) throw new ApiError(400, 'cloudflare_token_required', 'צריך מפתח API של Cloudflare');
+      const out = await applyRecords(token, row.name, row.records);
+      // Cloudflare usually serves new records within seconds; check right away (the worker keeps checking).
+      const checked = await checkDomain(row);
+      if (checked.status === 'verified' && req.auth.account.trust_level === 0) await runAutoTrust();
+      const fresh = await one('SELECT * FROM domains WHERE id = $1', [id]);
+      return { zone: out.zone, results: out.results, domain: { ...publicDomain(fresh), bimi: await bimiStatus(fresh) } };
     });
 
     /** BIMI: upload the sender logo (SVG Tiny PS) and optionally a VMC/CMC certificate. */

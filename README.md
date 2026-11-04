@@ -124,3 +124,11 @@ TEST_DATABASE_URL=postgres://... npm test
 ## הוספת ספק שליחה
 
 מממשים את `EmailProvider` שב-`src/providers/types.ts`. הממשק כולל את `send`, `createDomain`, `getDomainStatus`, `deleteDomain` ו-`parseWebhook`. אחר כך רושמים את הספק ב-`src/providers/index.ts`. כל דומיין שומר באיזה ספק הוא נוצר, ולכן אפשר לעבור לספק חדש בהדרגה.
+
+## חיבור אוטומטי ל-Cloudflare
+
+במסך הדומיין, לקוח מדביק מפתח API של Cloudflare (תבנית Edit zone DNS, לדומיין שלו בלבד). המערכת מוסיפה את כל הרשומות ומאמתת מיד. המפתח משמש לבקשה הזו בלבד ולא נשמר.
+רשומת DMARC קיימת לא משתנה לעולם, וכל הרשומות נוצרות במצב DNS only.
+
+למפעיל: אם מגדירים `CLOUDFLARE_API_TOKEN`, חשבונות של מנהל-העל (וחשבונות עם הרשאה לדומיינים שמורים) מקבלים כפתור "הוספה אוטומטית" בלי להדביק מפתח. לקוחות רגילים לא יכולים להשתמש במפתח הזה.
+API: `POST /v1/domains/:id/cloudflare` עם `{"token": "..."}` או `{"use_operator": true}`.

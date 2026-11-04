@@ -390,3 +390,41 @@ test('automatic trust: verified domain and legal details activate a new account;
   assert.equal(me.body.account.status, 'suspended');
   assert.match(me.body.account.paused_reason, /הושעתה אוטומטית/);
 });
+
+test('Cloudflare: adds missing records, keeps an existing DMARC, never stores the token', async () => {
+  const { cf } = await import('../src/services/cloudflare.js');
+  const calls: { method: string; url: string; body?: any }[] = [];
+  const zoneRecords: any[] = [{ id: 'r-dmarc', type: 'TXT', name: '_dmarc.cfshop.test', content: 'v=DMARC1; p=reject' }];
+  const real = cf.fetch;
+  cf.fetch = (async (url: string, init?: any) => {
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(init.body) : undefined;
+    calls.push({ method, url, body });
+    const u = new URL(url);
+    const json = (result: unknown) => new Response(JSON.stringify({ success: true, result }), { status: 200 });
+    if (init?.headers?.authorization !== 'Bearer cf-token-cf-token-cf-token') return new Response(JSON.stringify({ success: false, errors: [{ message: 'Invalid token' }] }), { status: 403 });
+    if (u.pathname.endsWith('/zones')) return json(u.searchParams.get('name') === 'cfshop.test' ? [{ id: 'z1', name: 'cfshop.test' }] : []);
+    if (u.pathname.endsWith('/dns_records') && method === 'GET') return json(zoneRecords.filter((r) => r.type === u.searchParams.get('type') && r.name === u.searchParams.get('name')));
+    if (method === 'POST') { zoneRecords.push({ id: `r${zoneRecords.length}`, ...body }); return json({}); }
+    return json({});
+  }) as any;
+  try {
+    const u = await api('POST', '/v1/auth/signup', undefined, { email: 'owner@cfshop.test', password: 'very-secret-6', name: 'חנות', account_name: 'חנות CF' });
+    const d = await api('POST', '/v1/domains', u.body.token, { name: 'mail.cfshop.test' });
+    const bad = await api('POST', `/v1/domains/${d.body.id}/cloudflare`, u.body.token, { token: 'wrong-token-wrong-token' });
+    assert.equal(bad.body.error.code, 'cloudflare_token_invalid');
+    const r = await api('POST', `/v1/domains/${d.body.id}/cloudflare`, u.body.token, { token: 'cf-token-cf-token-cf-token' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.zone, 'cfshop.test');
+    const posts = calls.filter((c) => c.method === 'POST');
+    assert.ok(posts.every((p) => p.body.proxied !== true), 'never proxied');
+    assert.ok(!posts.some((p) => p.body.name.startsWith('_dmarc')), 'existing DMARC is not touched');
+    // Regular customers can't use the operator token
+    const op = await api('POST', `/v1/domains/${d.body.id}/cloudflare`, u.body.token, { use_operator: true });
+    assert.equal(op.status, 403);
+    const [row] = await query(`SELECT * FROM domains WHERE id = $1`, [d.body.id]);
+    assert.doesNotMatch(JSON.stringify(row), /cf-token/, 'token not stored');
+  } finally {
+    cf.fetch = real;
+  }
+});
