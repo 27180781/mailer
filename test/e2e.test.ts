@@ -535,3 +535,21 @@ test('ad label: account default off, per-campaign override', async () => {
   assert.doesNotMatch(decoded, /פרסומת/);
   await api('PATCH', '/v1/account', K, { ad_label_default: true });
 });
+
+test('API: ad_label for marketing mail, Content-Language for Hebrew', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  const send = (body: any) => api('POST', '/v1/emails', K, { from: 'news@docs.retzef.test', text: 'כן?', ...body });
+  const m1 = await send({ to: 'adl1@client.test', subject: 'מבצע', type: 'marketing' });
+  const m2 = await send({ to: 'adl2@client.test', subject: 'מבצע', type: 'marketing', ad_label: false });
+  const m3 = await send({ to: 'adl3@client.test', subject: 'כן?' });
+  const rows = await query(`SELECT id, subject FROM messages WHERE id = ANY($1)`, [[m1.body.messages[0].id, m2.body.messages[0].id, m3.body.messages[0].id]]);
+  const subj = (id: string) => rows.find((r: any) => r.id === id).subject;
+  assert.equal(subj(m1.body.messages[0].id), 'פרסומת: מבצע', 'marketing follows the account default (on)');
+  assert.equal(subj(m2.body.messages[0].id), 'מבצע', 'ad_label: false');
+  assert.equal(subj(m3.body.messages[0].id), 'כן?', 'transactional: no label');
+  const before = sent().length;
+  while ((await sendBatch(50)) > 0);
+  const raw = sent().slice(before).find((m) => m.to === 'adl3@client.test')!.raw.toString();
+  assert.match(raw, /^Content-Language: he$/m);
+});

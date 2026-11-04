@@ -353,6 +353,7 @@ components:
         html: { type: string }
         text: { type: string, description: 'אם חסר, נוצר אוטומטית מה-html' }
         type: { type: string, enum: [transactional, marketing], default: transactional, description: 'marketing מוסיף קישור הסרה ומעקב' }
+        ad_label: { type: boolean, description: 'להוסיף «פרסומת» לתחילת הנושא. ברירת מחדל: לפי הגדרת החשבון במיילים מסוג marketing, וכבוי במיילים תפעוליים' }
         headers:
           type: object
           additionalProperties: { type: string }

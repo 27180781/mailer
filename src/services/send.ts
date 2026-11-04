@@ -99,6 +99,8 @@ export interface SendInput {
   scheduled_at?: string | null;
   /** Test API key: everything runs except the actual sending */
   test?: boolean;
+  /** Add "פרסומת" to the subject. Default: the account setting for marketing mail, off for transactional. */
+  ad_label?: boolean;
 }
 
 const MAX_RECIPIENTS = 50; // SES limit per message
@@ -165,6 +167,7 @@ export async function enqueueEmail(account: any, input: SendInput) {
     warnings.push('domain_not_verified');
   }
   const kind = input.type ?? 'transactional';
+  if (input.ad_label ?? (kind === 'marketing' && account.ad_label_default)) input.subject = advertisingSubject(input.subject);
   const fromDomain = resolved.domain?.name ?? domainOf(resolved.fromEmail);
   const meta = JSON.stringify({ ...(input.metadata ?? {}), fallback: input.fallback ?? 'reject' });
 
@@ -270,6 +273,10 @@ export async function processMessage(msg: any) {
     text = campaign.text ? personalize(campaign.text, vars, false) : null;
     replyTo = campaign.reply_to;
     if (campaign.is_advertisement) subject = advertisingSubject(subject);
+  }
+  // Tell mail clients the language, so Gmail doesn't offer to "translate from English" short Hebrew messages
+  if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-language') && /[\u0590-\u05FF]/.test(`${subject} ${text ?? ''} ${html ?? ''}`)) {
+    headers['Content-Language'] = 'he';
   }
   if (isMarketing && html) html = insertFooter(html, advertisingFooter(account, unsubscribeUrl(msg.id)));
   if (isMarketing) Object.assign(headers, listUnsubscribeHeaders(msg.id));

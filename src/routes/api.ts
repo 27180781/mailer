@@ -50,6 +50,7 @@ const sendSchema = z
     html: z.string().max(2_000_000).nullish(),
     text: z.string().max(1_000_000).nullish(),
     type: z.enum(['transactional', 'marketing']).default('transactional'),
+    ad_label: z.boolean().optional(),
     attachments: z.array(attachment).max(10).default([]),
     headers: z
       .record(z.string().regex(/^(X-[A-Za-z0-9-]+|Message-ID|In-Reply-To|References)$/i, 'מותרות כותרות X-…, ו-Message-ID, In-Reply-To, References'), z.string().max(2000))
@@ -685,6 +686,7 @@ export async function apiRoutes(app: FastifyInstance) {
         html: c.html,
         text: c.text,
         type: 'marketing',
+        ad_label: false, // the test subject above already carries the label when the campaign has it
         metadata: { test_of_campaign: c.id },
       });
       return { messages: res.messages.map((m: any) => ({ id: m.id, to: m.to_email, status: m.status })) };

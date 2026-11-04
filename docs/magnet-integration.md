@@ -182,7 +182,8 @@ Content-Type: application/json
 | `headers` | אובייקט | לא | `Message-ID`, `In-Reply-To`, `References`, וכל כותרת שמתחילה ב-`X-` |
 | `attachments` | מערך | לא | `[{ "filename": "...", "content": "<base64>", "content_type": "application/pdf" }]` |
 | `metadata` | אובייקט | לא | כל מידע שלכם, למשל `lead_id`. חוזר בכל webhook של המייל |
-| `type` | `transactional` / `marketing` | לא | ברירת מחדל `transactional`. `marketing` מוסיף קישור הסרה, מעקב פתיחות והקלקות, ואת "פרסומת" בנושא |
+| `type` | `transactional` / `marketing` | לא | ברירת מחדל `transactional`. `marketing` מוסיף קישור הסרה ומעקב פתיחות והקלקות |
+| `ad_label` | בוליאני | לא | להוסיף "פרסומת" לתחילת הנושא. ברירת מחדל: לפי הגדרת החשבון במיילים מסוג `marketing`, וכבוי במיילים תפעוליים. חוק התקשורת מחייב את המילה בדיוור פרסומי |
 | `scheduled_at` | ISO 8601 | לא | שליחה מתוזמנת |
 
 כותרת אופציונלית: `Idempotency-Key`. בקשה חוזרת עם אותו מפתח מחזירה את המייל המקורי ולא שולחת שוב. מומלץ מאוד, למשל `crm-msg-<id>`.
