@@ -32,7 +32,7 @@ export class SmtpProvider implements EmailProvider {
     const privateKey = email.providerData?.dkimPrivateKey as string | undefined;
     try {
       const info = await this.transport.sendMail({
-        envelope: { from: `bounce@${config.ses.mailFromSubdomain}.${email.domain}`, to: [email.to] },
+        envelope: { from: `bounce@${config.ses.mailFromSubdomain}.${email.domain}`, to: email.recipients },
         raw: email.raw,
         dkim: privateKey ? { domainName: email.domain, keySelector: SELECTOR, privateKey } : undefined,
       } as any);

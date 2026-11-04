@@ -8,6 +8,8 @@ export interface AuthContext {
   account: any;
   user: any | null;
   apiKeyId: string | null;
+  /** true for test keys (mk_test_…): emails are processed but never sent */
+  testMode: boolean;
 }
 
 declare module 'fastify' {
@@ -24,11 +26,11 @@ export async function createSession(userId: string) {
   return token;
 }
 
-export async function createApiKey(accountId: string, name: string) {
-  const key = `mk_live_${randomToken(32)}`;
+export async function createApiKey(accountId: string, name: string, mode: 'live' | 'test' = 'live') {
+  const key = `mk_${mode}_${randomToken(32)}`;
   const row = await one(
-    `INSERT INTO api_keys (account_id, name, prefix, key_hash) VALUES ($1, $2, $3, $4) RETURNING id, name, prefix, created_at`,
-    [accountId, name, key.slice(0, 12), sha256(key)],
+    `INSERT INTO api_keys (account_id, name, prefix, key_hash, mode) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, prefix, mode, created_at`,
+    [accountId, name, key.slice(0, 12), sha256(key), mode],
   );
   return { ...row, key };
 }
@@ -55,12 +57,12 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
   const hash = sha256(token);
 
   if (token.startsWith('mk_')) {
-    const key = await one(`SELECT id, account_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, [hash]);
+    const key = await one(`SELECT id, account_id, mode FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, [hash]);
     if (!key) throw new ApiError(401, 'unauthorized', 'מפתח API לא תקין');
     rateLimit(key.id);
     const account = await one('SELECT * FROM accounts WHERE id = $1', [key.account_id]);
     void query('UPDATE api_keys SET last_used_at = now() WHERE id = $1', [key.id]);
-    req.auth = { account, user: null, apiKeyId: key.id };
+    req.auth = { account, user: null, apiKeyId: key.id, testMode: key.mode === 'test' };
     return;
   }
   if (token.startsWith('ms_')) {
@@ -71,7 +73,7 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
     if (!user) throw new ApiError(401, 'unauthorized', 'פג תוקף ההתחברות. יש להתחבר מחדש');
     rateLimit(user.id);
     const account = await one('SELECT * FROM accounts WHERE id = $1', [user.account_id]);
-    req.auth = { account, user, apiKeyId: null };
+    req.auth = { account, user, apiKeyId: null, testMode: false };
     return;
   }
   throw new ApiError(401, 'unauthorized', 'מפתח API לא תקין');

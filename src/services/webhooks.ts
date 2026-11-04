@@ -4,6 +4,7 @@ import { hmac, randomToken } from '../crypto.js';
 export const WEBHOOK_EVENTS = [
   'email.sent',
   'email.delivered',
+  'email.delayed',
   'email.bounced',
   'email.complained',
   'email.failed',

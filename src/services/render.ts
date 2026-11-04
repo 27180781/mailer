@@ -10,10 +10,13 @@ export interface Attachment {
 
 export interface BuildInput {
   messageId: string;
+  /** Full Message-ID header, e.g. <abc@example.co.il>. Default: <messageId@domain> */
+  messageIdHeader?: string | null;
   domain: string;
   fromEmail: string;
   fromName?: string | null;
-  to: string;
+  to: string | string[];
+  cc?: string[];
   replyTo?: string | null;
   subject: string;
   html?: string | null;
@@ -26,11 +29,12 @@ export async function buildRaw(input: BuildInput): Promise<Buffer> {
   const mail = new MailComposer({
     from: input.fromName ? { name: input.fromName, address: input.fromEmail } : input.fromEmail,
     to: input.to,
+    cc: input.cc?.length ? input.cc : undefined,
     replyTo: input.replyTo || undefined,
     subject: input.subject,
     html: input.html || undefined,
     text: input.text || (input.html ? htmlToText(input.html) : undefined),
-    messageId: `<${input.messageId}@${input.domain}>`,
+    messageId: input.messageIdHeader || `<${input.messageId}@${input.domain}>`,
     headers: input.headers,
     attachments: (input.attachments ?? []).map((a) => ({
       filename: a.filename,

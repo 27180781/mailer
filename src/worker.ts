@@ -26,7 +26,7 @@ let capWarnedAt = 0;
 /** How many more emails may go out under DAILY_SEND_CAP (rolling 24 hours). */
 export async function remainingDailyCap(): Promise<number> {
   if (!config.dailySendCap) return Infinity;
-  const [row] = await query<{ n: number }>(`SELECT count(*)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours'`);
+  const [row] = await query<{ n: number }>(`SELECT count(*)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours' AND NOT test`);
   return Math.max(0, config.dailySendCap - (row?.n ?? 0));
 }
 

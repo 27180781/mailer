@@ -3,7 +3,7 @@
  * so Amazon SES can be swapped for another provider without touching business logic.
  */
 
-export type DnsRecordPurpose = 'dkim' | 'mail_from_mx' | 'mail_from_spf' | 'dmarc';
+export type DnsRecordPurpose = 'dkim' | 'mail_from_mx' | 'mail_from_spf' | 'dmarc' | 'bimi';
 
 export interface DnsRecord {
   type: 'CNAME' | 'TXT' | 'MX';
@@ -32,7 +32,10 @@ export interface OutgoingEmail {
   /** Our message id, used for correlation */
   id: string;
   from: string;
+  /** Primary recipient (first To) */
   to: string;
+  /** Every envelope recipient: To, Cc and Bcc. Bcc never appears in the headers. */
+  recipients: string[];
   /** Complete RFC 5322 message, already built by the system */
   raw: Buffer;
   domain: string;

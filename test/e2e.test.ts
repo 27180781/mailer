@@ -282,3 +282,66 @@ test('POST with an empty JSON body is accepted (verify button)', async () => {
   const bad = await app.inject({ method: 'POST', url: '/v1/auth/login', headers: { 'content-type': 'application/json' }, payload: '{nope' });
   assert.equal(bad.statusCode, 400);
 });
+
+test('threading headers, CC/BCC in one message, per-recipient events', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  const reply = await api('POST', '/v1/emails', K, {
+    from: { email: 'agent@docs.retzef.test', name: 'נציג' },
+    to: 'lead@client.test', cc: ['boss@client.test'], bcc: 'archive@client.test',
+    subject: 'Re: הצעת מחיר', text: 'תודה',
+    headers: { 'Message-ID': '<reply-1@docs.retzef.test>', 'In-Reply-To': '<orig-1@client.test>', References: '<orig-1@client.test>' },
+  });
+  assert.equal(reply.status, 202);
+  assert.equal(reply.body.messages.length, 1, 'one message for everyone');
+  assert.equal(reply.body.messages[0].message_id_header, '<reply-1@docs.retzef.test>');
+  assert.deepEqual(reply.body.messages[0].cc, ['boss@client.test']);
+
+  const before = sent().length;
+  while ((await sendBatch(50)) > 0);
+  const m = sent().slice(before).find((x) => x.to === 'lead@client.test')!;
+  const raw = m.raw.toString();
+  assert.deepEqual((m as any).recipients.sort(), ['archive@client.test', 'boss@client.test', 'lead@client.test']);
+  assert.match(raw, /^Message-ID: <reply-1@docs\.retzef\.test>/m);
+  assert.match(raw, /^In-Reply-To: <orig-1@client\.test>/m);
+  assert.match(raw, /^References: <orig-1@client\.test>/m);
+  assert.match(raw, /^Cc: boss@client\.test/m);
+  assert.doesNotMatch(raw, /archive@client\.test/, 'BCC never in headers');
+
+  // A bounce of the CC recipient is tracked on that recipient only
+  const [row] = await query(`SELECT provider_message_id FROM messages WHERE id = $1`, [reply.body.messages[0].id]);
+  await app.inject({ method: 'POST', url: '/webhooks/provider/log', headers: { 'content-type': 'text/plain' },
+    payload: JSON.stringify([{ type: 'bounced', providerMessageId: row.provider_message_id, recipient: 'boss@client.test', bounceType: 'soft' }, { type: 'delivered', providerMessageId: row.provider_message_id, recipient: 'lead@client.test' }]) });
+  const detail = await api('GET', `/v1/emails/${reply.body.messages[0].id}`, K);
+  assert.equal(detail.body.status, 'delivered');
+  assert.equal(detail.body.recipients.find((r: any) => r.email === 'boss@client.test').status, 'bounced');
+
+  const bad = await api('POST', '/v1/emails', K, { from: 'a@docs.retzef.test', to: ['x@client.test', 'y@client.test'], subject: 'x', text: 'x', headers: { 'Message-ID': '<dup@docs.retzef.test>' } });
+  assert.equal(bad.body.error.code, 'message_id_needs_single_message');
+  const badHeader = await api('POST', '/v1/emails', K, { from: 'a@docs.retzef.test', to: 'x@client.test', subject: 'x', text: 'x', headers: { 'Bcc': 'evil@x.test' } });
+  assert.equal(badHeader.status, 400);
+});
+
+test('test API keys simulate sending without sending or suppressing', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const key = await api('POST', '/v1/api-keys', u.body.token, { name: 'sandbox', mode: 'test' });
+  assert.match(key.body.key, /^mk_test_/);
+  const T = key.body.key;
+  const before = sent().length;
+  // Unverified domain is allowed with a warning in test mode
+  const r = await api('POST', '/v1/emails', T, { from: 'hello@not-verified-yet.test', to: ['ok@client.test', 'bounce-1@client.test'], subject: 'בדיקה', text: 'x' });
+  assert.equal(r.status, 202);
+  assert.equal(r.body.test, true);
+  assert.deepEqual(r.body.warnings, ['domain_not_verified']);
+  while ((await sendBatch(50)) > 0);
+  assert.equal(sent().length, before, 'nothing reached the provider');
+  const ok = await api('GET', `/v1/emails/${r.body.messages[0].id}`, T);
+  const bounced = await api('GET', `/v1/emails/${r.body.messages[1].id}`, T);
+  assert.equal(ok.body.status, 'delivered');
+  assert.equal(bounced.body.status, 'bounced');
+  const [s] = await query(`SELECT count(*)::int AS n FROM suppressions WHERE email = 'bounce-1@client.test'`);
+  assert.equal(s.n, 0, 'simulated bounce does not suppress');
+  // Live sends from an unverified domain are still refused
+  const live = await api('POST', '/v1/emails', u.body.token, { from: 'hello@not-verified-yet.test', to: 'ok@client.test', subject: 'x', text: 'x' });
+  assert.equal(live.body.error.code, 'domain_not_verified');
+});

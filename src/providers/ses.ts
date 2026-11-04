@@ -80,7 +80,7 @@ export class SesProvider implements EmailProvider {
       const out = await this.client.send(
         new SendEmailCommand({
           FromEmailAddress: email.from,
-          Destination: { ToAddresses: [email.to] },
+          Destination: { ToAddresses: email.recipients },
           Content: { Raw: { Data: email.raw } },
           ConfigurationSetName: config.ses.configurationSet,
           EmailTags: Object.entries(email.tags ?? {}).map(([Name, Value]) => ({

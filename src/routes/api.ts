@@ -30,12 +30,16 @@ const sendSchema = z
     fallback: z.enum(['platform', 'reject']).default('reject'),
     reply_to: email.nullish(),
     to: z.union([email.transform((e) => [e]), z.array(email).min(1).max(50)]),
+    cc: z.union([email.transform((e) => [e]), z.array(email).max(49)]).default([]),
+    bcc: z.union([email.transform((e) => [e]), z.array(email).max(49)]).default([]),
     subject: z.string().min(1).max(998),
     html: z.string().max(2_000_000).nullish(),
     text: z.string().max(1_000_000).nullish(),
     type: z.enum(['transactional', 'marketing']).default('transactional'),
     attachments: z.array(attachment).max(10).default([]),
-    headers: z.record(z.string().regex(/^X-[A-Za-z0-9-]+$/, 'מותרות רק כותרות שמתחילות ב-X-'), z.string().max(500)).default({}),
+    headers: z
+      .record(z.string().regex(/^(X-[A-Za-z0-9-]+|Message-ID|In-Reply-To|References)$/i, 'מותרות כותרות X-…, ו-Message-ID, In-Reply-To, References'), z.string().max(2000))
+      .default({}),
     metadata: z.record(z.unknown()).default({}),
     scheduled_at: z.string().datetime().nullish(),
   })
@@ -165,12 +169,12 @@ export async function apiRoutes(app: FastifyInstance) {
 
     // ---------- API keys ----------
     r.get('/v1/api-keys', async (req) =>
-      query(`SELECT id, name, prefix, last_used_at, created_at FROM api_keys WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC`, [req.auth.account.id]),
+      query(`SELECT id, name, prefix, mode, last_used_at, created_at FROM api_keys WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC`, [req.auth.account.id]),
     );
     r.post('/v1/api-keys', async (req, reply) => {
-      const b = z.object({ name: z.string().min(1).max(80) }).parse(req.body);
+      const b = z.object({ name: z.string().min(1).max(80), mode: z.enum(['live', 'test']).default('live') }).parse(req.body);
       reply.code(201);
-      return createApiKey(req.auth.account.id, b.name);
+      return createApiKey(req.auth.account.id, b.name, b.mode);
     });
     r.delete('/v1/api-keys/:id', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
@@ -291,19 +295,27 @@ export async function apiRoutes(app: FastifyInstance) {
     r.post('/v1/emails', async (req, reply) => {
       const b = sendSchema.parse(req.body);
       const idem = (req.headers['idempotency-key'] as string | undefined) ?? null;
-      const res = await enqueueEmail(req.auth.account, { ...b, idempotency_key: idem });
+      const res = await enqueueEmail(req.auth.account, { ...b, idempotency_key: idem, test: req.auth.testMode });
       reply.code(res.duplicate ? 200 : 202);
       return {
         duplicate: res.duplicate,
+        test: req.auth.testMode,
         used_fallback: res.messages[0]?.used_fallback ?? false,
         from_email: res.messages[0]?.from_email,
-        messages: res.messages.map((m: any) => ({ id: m.id, to: m.to_email, status: m.status })),
+        warnings: res.warnings,
+        messages: res.messages.map((m: any) => ({
+          id: m.id,
+          to: m.to_email,
+          ...(m.cc?.length || m.bcc?.length ? { to_list: m.to_list, cc: m.cc, bcc: m.bcc } : {}),
+          message_id_header: m.message_id_header,
+          status: m.status,
+        })),
       };
     });
     r.get('/v1/emails', async (req) => {
       const q = page.extend({ status: z.string().optional(), to: z.string().optional(), sender_id: uuid.optional() }).parse(req.query);
       return query(
-        `SELECT id, sender_id, campaign_id, kind, to_email, from_email, from_name, subject, status, used_fallback, last_error, metadata, opened_at, clicked_at, sent_at, created_at
+        `SELECT id, sender_id, campaign_id, kind, to_email, cc, bcc, from_email, from_name, subject, status, used_fallback, last_error, message_id_header, test, metadata, opened_at, clicked_at, sent_at, created_at
          FROM messages WHERE account_id = $1 AND campaign_id IS NULL AND ($2::text IS NULL OR status = $2) AND ($3::text IS NULL OR to_email = lower($3))
            AND ($4::uuid IS NULL OR sender_id = $4)
          ORDER BY created_at DESC LIMIT $5 OFFSET $6`,
@@ -313,13 +325,14 @@ export async function apiRoutes(app: FastifyInstance) {
     r.get('/v1/emails/:id', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
       const m = await one(
-        `SELECT id, sender_id, campaign_id, kind, to_email, from_email, from_name, reply_to, subject, status, used_fallback, attempts, last_error,
-           metadata, opened_at, clicked_at, sent_at, created_at FROM messages WHERE id = $1 AND account_id = $2`,
+        `SELECT id, sender_id, campaign_id, kind, to_email, to_list, cc, bcc, from_email, from_name, reply_to, subject, status, used_fallback, attempts, last_error,
+           message_id_header, test, metadata, opened_at, clicked_at, sent_at, created_at FROM messages WHERE id = $1 AND account_id = $2`,
         [id, req.auth.account.id],
       );
       if (!m) throw notFound('המייל');
       const events = await query('SELECT type, data, created_at FROM events WHERE message_id = $1 ORDER BY id', [id]);
-      return { ...m, events };
+      const recipients = await query('SELECT email, kind, status, detail, updated_at FROM message_recipients WHERE message_id = $1 ORDER BY kind DESC, email', [id]);
+      return { ...m, recipients, events };
     });
 
     // ---------- Contacts ----------
