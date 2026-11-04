@@ -66,7 +66,7 @@ export async function resolveFrom(account: any, senderId: string | null, from: {
 
 export async function sentToday(accountId: string): Promise<number> {
   const row = await one<{ n: string }>(
-    `SELECT count(*) AS n FROM messages WHERE account_id = $1 AND NOT test AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem'`,
+    `SELECT coalesce(sum(greatest(1, cardinality(to_list) + cardinality(cc) + cardinality(bcc))), 0) AS n FROM messages WHERE account_id = $1 AND NOT test AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem'`,
     [accountId],
   );
   return Number(row?.n ?? 0);
@@ -210,6 +210,7 @@ export async function enqueueEmail(account: any, input: SendInput) {
 }
 
 const RETRY_SECONDS = [60, 300, 1800];
+const THROTTLE_CODES = new Set(['TooManyRequestsException', 'LimitExceededException', 'ThrottlingException', 'Throttling']);
 
 /** Sends one claimed message. Called by the worker. */
 export async function processMessage(msg: any) {
@@ -308,8 +309,9 @@ export async function processMessage(msg: any) {
   }
 
   const provider = getProvider(domain.provider);
+  let out: { providerMessageId: string };
   try {
-    const out = await provider.send({
+    out = await provider.send({
       id: msg.id,
       from: fromEmail,
       to: msg.to_email,
@@ -319,15 +321,17 @@ export async function processMessage(msg: any) {
       providerData: domain.provider_data,
       tags: { account: account.id, kind: msg.kind },
     });
-    await query(
-      `UPDATE messages SET status = 'sent', provider = $2, provider_message_id = $3, sent_at = now(), last_error = NULL,
-         attachments = NULL WHERE id = $1`,
-      [msg.id, provider.name, out.providerMessageId],
-    );
-    await query(`UPDATE message_recipients SET status = 'sent', updated_at = now() WHERE message_id = $1 AND status = 'queued'`, [msg.id]);
-    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, from_name: fromName ?? null, used_fallback: msg.used_fallback, message_id_header: msg.message_id_header, metadata: msg.metadata });
   } catch (err: any) {
     const temporary = err instanceof ProviderError ? err.temporary : true;
+    // Throttling / quota: the provider is saying "later", not "no". Don't use up a retry for it.
+    if (err instanceof ProviderError && THROTTLE_CODES.has(err.code ?? '')) {
+      const daily = /daily/i.test(err.message);
+      await query(
+        `UPDATE messages SET status = 'queued', attempts = greatest(attempts - 1, 0), next_attempt_at = now() + make_interval(secs => $2), last_error = $3 WHERE id = $1`,
+        [msg.id, daily ? 1800 : 60 + Math.floor(Math.random() * 60), String(err.message).slice(0, 500)],
+      );
+      return;
+    }
     const wait = RETRY_SECONDS[msg.attempts - 1];
     if (temporary && wait !== undefined) {
       await query(`UPDATE messages SET status = 'queued', next_attempt_at = now() + make_interval(secs => $2), last_error = $3 WHERE id = $1`, [
@@ -338,5 +342,19 @@ export async function processMessage(msg: any) {
     } else {
       await fail(String(err.message).slice(0, 500));
     }
+    return;
+  }
+  // The email has left. From here on nothing may put it back in the queue, or the recipient gets it twice.
+  try {
+    await query(
+      `UPDATE messages SET status = 'sent', provider = $2, provider_message_id = $3, sent_at = now(), last_error = NULL,
+         attachments = NULL WHERE id = $1`,
+      [msg.id, provider.name, out.providerMessageId],
+    );
+    await query(`UPDATE message_recipients SET status = 'sent', updated_at = now() WHERE message_id = $1 AND status = 'queued'`, [msg.id]);
+    await emitEvent(account.id, 'email.sent', { message_id: msg.id, to: msg.to_email, recipients, from: fromEmail, from_name: fromName ?? null, used_fallback: msg.used_fallback, message_id_header: msg.message_id_header, metadata: msg.metadata });
+  } catch (err) {
+    console.error(`message ${msg.id} was sent (${out.providerMessageId}) but recording it failed`, err);
+    await query(`UPDATE messages SET status = 'sent', provider_message_id = coalesce(provider_message_id, $2) WHERE id = $1`, [msg.id, out.providerMessageId]).catch(() => {});
   }
 }

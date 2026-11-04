@@ -26,11 +26,16 @@ export const SUGGESTED_DMARC = 'v=DMARC1; p=none; adkim=r; aspf=r';
 /** DNS lookups go through this object so tests can replace them. */
 export const dnsLookup = { resolveTxt };
 
+/** Thrown when a DNS lookup fails for a reason other than "no such record" (timeout, SERVFAIL…). */
+export class TransientDnsError extends Error {}
+const NOT_FOUND = new Set(['ENOTFOUND', 'ENODATA', 'NXDOMAIN', 'ENONAME']);
+
 async function txt(name: string): Promise<string[]> {
   try {
     return (await dnsLookup.resolveTxt(name)).map((parts) => parts.join(''));
-  } catch {
-    return [];
+  } catch (err: any) {
+    if (!err?.code || NOT_FOUND.has(err.code)) return [];
+    throw new TransientDnsError(`${err.code} for ${name}`);
   }
 }
 
@@ -117,13 +122,20 @@ export async function addDomain(accountId: string, senderId: string | null, rawN
 /** Re-checks a domain at the provider and in DNS, updates its status and emits webhook events. */
 export async function checkDomain(row: any) {
   const provider = getProvider(row.provider);
-  let status = { dkim: 'pending', mailFrom: 'pending' } as { dkim: string; mailFrom: string };
+  let status: { dkim: string; mailFrom: string };
+  let dmarcRec: { name: string; value: string } | null;
   try {
     status = await provider.getDomainStatus(row.name, row.provider_data ?? {});
+    dmarcRec = await findDmarcRecord(row.name);
   } catch (err) {
-    console.error(`domain check failed for ${row.name}`, err);
+    // A provider outage or a DNS timeout says nothing about the records: keep the current status, try again soon.
+    console.error(`domain check skipped for ${row.name} (temporary error)`, err);
+    await query(
+      `UPDATE domains SET last_checked_at = CASE WHEN status = 'verified' THEN now() - interval '23 hours 50 minutes' ELSE now() END WHERE id = $1`,
+      [row.id],
+    );
+    return publicDomain(row);
   }
-  const dmarcRec = await findDmarcRecord(row.name);
   const dmarc = dmarcRec?.value ?? null;
   const dmarcStatus = dmarc ? 'verified' : 'pending';
   const all = status.dkim === 'verified' && status.mailFrom === 'verified' && dmarcStatus === 'verified';
@@ -137,7 +149,7 @@ export async function checkDomain(row: any) {
   const bimiRec = (row.records as DnsRecord[]).find((r) => r.purpose === 'bimi');
   let bimiDns = 'pending';
   if (bimiRec) {
-    const found = await txt(bimiRec.name);
+    const found = await txt(bimiRec.name).catch(() => [] as string[]);
     const want = bimiRec.value.match(/l=([^;\s]+)/)?.[1];
     bimiDns = found.some((t) => /v=BIMI1/i.test(t) && (!want || t.includes(want))) ? 'verified' : 'pending';
   }
@@ -184,7 +196,8 @@ export async function checkDueDomains() {
   const due = await query(
     `SELECT * FROM domains WHERE
        (status = 'pending' AND (last_checked_at IS NULL OR last_checked_at < now() - interval '10 minutes'))
-       OR (status IN ('verified', 'degraded') AND (last_checked_at IS NULL OR last_checked_at < now() - interval '1 day'))
+       OR (status = 'degraded' AND (last_checked_at IS NULL OR last_checked_at < now() - interval '10 minutes'))
+       OR (status = 'verified' AND (last_checked_at IS NULL OR last_checked_at < now() - interval '1 day'))
      ORDER BY last_checked_at NULLS FIRST LIMIT 20`,
   );
   for (const row of due) await checkDomain(row);
@@ -199,7 +212,7 @@ export async function findSendingDomain(accountId: string, senderId: string | nu
   const d = domainOf(email);
   const candidates = d.split('.').map((_, i, a) => a.slice(i).join('.')).filter((x) => x.includes('.'));
   const rows = await query(
-    `SELECT * FROM domains WHERE account_id = $1 AND sender_id IS NOT DISTINCT FROM $2 AND name = ANY($3) AND status = 'verified'
+    `SELECT * FROM domains WHERE account_id = $1 AND sender_id IS NOT DISTINCT FROM $2 AND name = ANY($3) AND status IN ('verified', 'degraded')
      ORDER BY length(name) DESC LIMIT 1`,
     [accountId, senderId, candidates],
   );

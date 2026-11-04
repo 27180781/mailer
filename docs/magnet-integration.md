@@ -194,6 +194,7 @@ Content-Type: application/json
 
 - **בלי `cc` ובלי `bcc`:** כל כתובת ב-`to` מקבלת מייל נפרד, עם `id` ו-Message-ID משלה. אף נמען לא רואה את האחרים.
 - **עם `cc` או `bcc`:** נשלח מייל אחד לכולם, כמו מתוכנת דואר רגילה. יש `id` אחד ומצב לכל נמען.
+- **במייל שיווקי (`"type": "marketing"`) אי אפשר להשתמש ב-`cc` או ב-`bcc`.** לכל נמען יש קישור הסרה אישי, ולכן כל אחד מקבל מייל נפרד.
 
 #### עברית ויישור לימין
 
@@ -645,6 +646,7 @@ CREATE TABLE email_events (
 | `freemail_not_allowed` | 400 | ניסיון לשלוח מכתובת Gmail או כתובת דואר חינמי אחרת |
 | `domain_not_owned` | 403 | הדומיין רשום בחשבון אחר |
 | `too_many_recipients` | 400 | יותר מ-50 נמענים |
+| `validation_error` (cc במייל שיווקי) | 400 | `cc`/`bcc` לא אפשריים עם `"type": "marketing"` |
 | `invalid_message_id` | 400 | Message-ID לא בפורמט `<id@domain>` |
 | `message_id_needs_single_message` | 400 | Message-ID מותאם עם כמה נמענים ב-`to` בלי cc/bcc |
 | `daily_limit_exceeded` | 429 | עברתם את המכסה היומית. מתאפסת בחצות |

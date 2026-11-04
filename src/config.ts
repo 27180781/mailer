@@ -15,7 +15,7 @@ export const config = {
   appSecret: env('APP_SECRET', 'dev-secret-change-me'),
   provider: env('EMAIL_PROVIDER', 'ses') as 'ses' | 'smtp' | 'log',
   ses: {
-    region: env('SES_REGION', 'eu-central-1'),
+    region: env('SES_REGION', 'il-central-1'),
     configurationSet: process.env.SES_CONFIGURATION_SET || undefined,
     mailFromSubdomain: env('MAIL_FROM_SUBDOMAIN', 'bounce'),
   },

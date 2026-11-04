@@ -58,7 +58,7 @@
 | `EMAIL_PROVIDER` | `ses` (ברירת מחדל), `smtp` או `log` (לפיתוח) |
 | `SES_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | חיבור ל-SES |
 | `SES_CONFIGURATION_SET` | ה-Configuration Set עם אירועי SNS |
-| `SES_SNS_TOPIC_ARN` | (מומלץ) מקבלים רק התראות מהנושא הזה |
+| `SES_SNS_TOPIC_ARN` | **חובה.** מקבלים רק התראות מהנושא הזה. בלעדיו כל התראות SNS נדחות |
 | `MAX_SEND_RATE` | מיילים בשנייה לכל המערכת, לפי המכסה ב-SES (ברירת מחדל 14) |
 | `DAILY_SEND_CAP` | תקרה לכל המערכת: מיילים ב-24 שעות אחרונות (0 = בלי תקרה). מעליה המיילים מחכים בתור. שימושי כשחשבון ה-AWS משותף |
 | `NEW_ACCOUNT_DAILY_LIMIT` | מכסה יומית לחשבון חדש שעוד לא אושר (ברירת מחדל 200) |

@@ -50,6 +50,9 @@ export function s3Store(): BackupStore {
     endpoint: c.endpoint,
     credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey },
     forcePathStyle: true,
+    // R2 doesn't accept every checksum the newer SDK sends by default
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
   return {
     async upload(key, body) {
@@ -154,11 +157,21 @@ export async function runBackup(reason: 'scheduled' | 'manual' = 'manual') {
       });
       const counter = new Transform({ transform(chunk, _e, cb) { bytes += chunk.length; cb(null, chunk); } });
       const out = new PassThrough();
+      // Both sides run together; a failure on either side rejects here instead of crashing the process.
       const uploading = store.upload(key, out);
-      await pipeline(dump.stdout, createGzip(), encryptor(c.passphrase), counter, out);
+      try {
+        await Promise.all([pipeline(dump.stdout, createGzip(), encryptor(c.passphrase), counter, out), uploading]);
+      } catch (err) {
+        out.destroy();
+        dump.kill();
+        throw err;
+      }
       const code = await exited;
-      if (code !== 0) throw new Error(`pg_dump נכשל (${code}): ${stderr.trim().slice(0, 300)}`);
-      await uploading;
+      if (code !== 0) {
+        // pg_dump closed its output early: the uploaded file is incomplete, so don't keep it
+        await store.remove(key).catch(() => {});
+        throw new Error(`pg_dump נכשל (${code}): ${stderr.trim().slice(0, 300)}`);
+      }
     } catch (err: any) {
       await setStatus({ ok: false, at: new Date().toISOString(), reason, error: String(err?.message ?? err), key });
       throw err;

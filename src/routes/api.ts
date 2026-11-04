@@ -60,6 +60,8 @@ const sendSchema = z
     scheduled_at: z.string().datetime().nullish(),
   })
   .refine((v) => v.html || v.text, { message: 'צריך html או text' })
+  // Marketing mail has a personal unsubscribe link: one message per recipient, so no shared CC/BCC
+  .refine((v) => v.type !== 'marketing' || (v.cc.length === 0 && v.bcc.length === 0), { message: 'במייל שיווקי (type=marketing) אי אפשר להשתמש ב-cc או ב-bcc. כל נמען מקבל מייל משלו עם קישור הסרה אישי' })
   .refine((v) => v.attachments.reduce((n, a) => n + (a.content.length * 3) / 4, 0) <= MAX_ATTACHMENTS_BYTES, {
     message: 'גודל הקבצים המצורפים חורג מ-10MB',
   });

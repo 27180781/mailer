@@ -628,3 +628,61 @@ test('SES: the From header keeps the display name (no FromEmailAddress override)
   assert.equal(d.payload.data.from, 'info@docs.retzef.test');
   assert.equal(d.payload.data.from_name, 'MagnetAds');
 });
+
+test('robustness: transient DNS, degraded domains, foreign recipients, campaign double start, marketing CC, SNS topic, multipart unsubscribe', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  const { checkDomain } = await import('../src/services/domains.js');
+
+  // 1. A DNS timeout doesn't knock a verified domain out
+  const [dom] = await query(`SELECT * FROM domains WHERE name = 'docs.retzef.test'`);
+  assert.equal(dom.status, 'verified');
+  const realTxt = dnsLookup.resolveTxt;
+  dnsLookup.resolveTxt = (async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }); }) as any;
+  try { await checkDomain(dom); } finally { dnsLookup.resolveTxt = realTxt; }
+  const [after] = await query(`SELECT status FROM domains WHERE id = $1`, [dom.id]);
+  assert.equal(after.status, 'verified', 'transient DNS error keeps the status');
+
+  // 2. A degraded domain still sends (SES has the final word)
+  await query(`UPDATE domains SET status = 'degraded' WHERE id = $1`, [dom.id]);
+  const e = await api('POST', '/v1/emails', K, { from: 'news@docs.retzef.test', to: 'deg@client.test', subject: 'x', text: 'x' });
+  while ((await sendBatch(50)) > 0);
+  const [m] = await query(`SELECT status, provider_message_id FROM messages WHERE id = $1`, [e.body.messages[0].id]);
+  assert.equal(m.status, 'sent');
+  await query(`UPDATE domains SET status = 'verified' WHERE id = $1`, [dom.id]);
+
+  // 3. A bounce for an address that isn't a recipient of the message is ignored
+  await app.inject({ method: 'POST', url: '/webhooks/provider/log', headers: { 'content-type': 'text/plain' },
+    payload: JSON.stringify([{ type: 'bounced', providerMessageId: m.provider_message_id, recipient: 'victim@elsewhere.test', bounceType: 'hard' }]) });
+  const [sup] = await query(`SELECT count(*)::int AS n FROM suppressions WHERE email = 'victim@elsewhere.test'`);
+  assert.equal(sup.n, 0);
+
+  // 4. Starting the same campaign twice at once creates one message per contact
+  const list = await api('POST', '/v1/lists', K, { name: 'כפילות', double_opt_in: false });
+  await api('POST', '/v1/contacts/import', K, { contacts: [{ email: 'dup1@client.test' }, { email: 'dup2@client.test' }], list_ids: [list.body.id], consent_source: 'טופס באתר', consent_declared: true });
+  const camp = await api('POST', '/v1/campaigns', K, { name: 'כפול', subject: 's', from_name: 'r', from_email: 'news@docs.retzef.test', html: '<p>x</p>', list_ids: [list.body.id] });
+  await api('POST', `/v1/campaigns/${camp.body.id}/send`, K, {});
+  await Promise.all([startDueCampaigns(), startDueCampaigns(), startDueCampaigns()]);
+  const [cnt] = await query(`SELECT count(*)::int AS n FROM messages WHERE campaign_id = $1`, [camp.body.id]);
+  assert.equal(cnt.n, 2);
+
+  // 5. Marketing mail can't share CC (one personal unsubscribe link per recipient)
+  const mk = await api('POST', '/v1/emails', K, { from: 'news@docs.retzef.test', to: 'a@client.test', cc: 'b@client.test', subject: 'x', text: 'x', type: 'marketing' });
+  assert.equal(mk.status, 400);
+
+  // 6. SNS from an unknown topic is rejected before any network call
+  const { SesProvider } = await import('../src/providers/ses.js');
+  delete process.env.SES_SNS_TOPIC_ARN;
+  await assert.rejects(new SesProvider().parseWebhook({}, JSON.stringify({ Type: 'Notification', TopicArn: 'arn:aws:sns:il-central-1:999:evil' })), /SES_SNS_TOPIC_ARN/);
+  process.env.SES_SNS_TOPIC_ARN = 'arn:aws:sns:il-central-1:010569743794:mailer-ses-events';
+  await assert.rejects(new SesProvider().parseWebhook({}, JSON.stringify({ Type: 'Notification', TopicArn: 'arn:aws:sns:il-central-1:999:evil' })), /לא מורשה/);
+  delete process.env.SES_SNS_TOPIC_ARN;
+
+  // 7. One-click unsubscribe sent as multipart/form-data
+  const mm = await api('POST', '/v1/emails', K, { from: 'news@docs.retzef.test', to: 'mp@client.test', subject: 'x', text: 'x', type: 'marketing' });
+  const { signToken } = await import('../src/crypto.js');
+  const boundary = '----x';
+  const res = await app.inject({ method: 'POST', url: `/u/${signToken(mm.body.messages[0].id)}`, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload: `--${boundary}\r\nContent-Disposition: form-data; name="List-Unsubscribe"\r\n\r\nOne-Click\r\n--${boundary}--\r\n` });
+  assert.equal(res.statusCode, 200);
+});

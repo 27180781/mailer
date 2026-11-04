@@ -25,6 +25,8 @@ export async function buildServer() {
       done(Object.assign(new Error('גוף הבקשה אינו JSON תקין'), { statusCode: 400, code: 'invalid_json' }), undefined);
     }
   });
+  // RFC 8058 one-click unsubscribe may arrive as multipart/form-data; we only need the request, not its parts
+  app.addContentTypeParser('multipart/form-data', { parseAs: 'string' }, (_req, body, done) => done(null, body));
   // SNS posts JSON with content-type text/plain
   app.addContentTypeParser('text/plain', { parseAs: 'string' }, (_req, body, done) => done(null, body));
   await app.register(formbody);

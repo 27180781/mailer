@@ -1,4 +1,4 @@
-import { one, query } from '../db.js';
+import { one, query, tx } from '../db.js';
 import { sentToday } from './send.js';
 import { emitEvent } from './webhooks.js';
 
@@ -51,18 +51,27 @@ export async function startDueCampaigns() {
       await pause(c, `מספר הנמענים (${recipients?.n}) חורג מהמכסה היומית שנותרה (${c.daily_limit - used})`);
       continue;
     }
-    await query(
-      `INSERT INTO messages (account_id, sender_id, campaign_id, contact_id, kind, priority, to_email, from_email, from_name, reply_to, subject)
-       SELECT DISTINCT ON (ct.id) c.account_id, c.sender_id, c.id, ct.id, 'campaign', 10, ct.email, c.from_email, c.from_name, c.reply_to, c.subject
-       FROM campaigns c
-       JOIN campaign_lists cl ON cl.campaign_id = c.id
-       JOIN list_members lm ON lm.list_id = cl.list_id AND lm.status = 'confirmed'
-       JOIN contacts ct ON ct.id = lm.contact_id AND ct.status = 'active'
-       WHERE c.id = $1
-         AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.email = ct.email AND (s.account_id IS NULL OR s.account_id = c.account_id))`,
-      [c.id],
-    );
-    await query(`UPDATE campaigns SET status = 'sending', started_at = now(), updated_at = now() WHERE id = $1`, [c.id]);
+    // Claim and expand in one transaction: only the worker whose UPDATE wins inserts the messages,
+    // and a crash in between rolls both back.
+    await tx(async (client) => {
+      const claimed = await client.query(
+        `UPDATE campaigns SET status = 'sending', started_at = now(), updated_at = now() WHERE id = $1 AND status = 'scheduled' RETURNING id`,
+        [c.id],
+      );
+      if (!claimed.rowCount) return;
+      await client.query(
+        `INSERT INTO messages (account_id, sender_id, campaign_id, contact_id, kind, priority, to_email, from_email, from_name, reply_to, subject)
+         SELECT DISTINCT ON (ct.id) c.account_id, c.sender_id, c.id, ct.id, 'campaign', 10, ct.email, c.from_email, c.from_name, c.reply_to, c.subject
+         FROM campaigns c
+         JOIN campaign_lists cl ON cl.campaign_id = c.id
+         JOIN list_members lm ON lm.list_id = cl.list_id AND lm.status = 'confirmed'
+         JOIN contacts ct ON ct.id = lm.contact_id AND ct.status = 'active'
+         WHERE c.id = $1
+           AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.email = ct.email AND (s.account_id IS NULL OR s.account_id = c.account_id))
+         ON CONFLICT (campaign_id, contact_id) WHERE campaign_id IS NOT NULL AND contact_id IS NOT NULL DO NOTHING`,
+        [c.id],
+      );
+    });
   }
 }
 

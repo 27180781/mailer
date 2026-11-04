@@ -178,7 +178,13 @@ export async function publicRoutes(app: FastifyInstance) {
     }
     try {
       const events = await provider.parseWebhook(req.headers as any, body);
-      await handleProviderEvents(events);
+      const { unmatched } = await handleProviderEvents(events);
+      // An event can arrive a moment before the send is recorded. Ask the provider to retry recent ones.
+      const recent = events.some((e) => Date.now() - e.occurredAt.getTime() < 10 * 60_000);
+      if (unmatched && recent) {
+        reply.code(503);
+        return { ok: false, retry: true, unmatched };
+      }
       return { ok: true, events: events.length };
     } catch (err: any) {
       req.log.warn({ err }, 'provider webhook rejected');

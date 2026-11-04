@@ -25,10 +25,16 @@ async function claim(limit: number) {
 
 let capWarnedAt = 0;
 
+/** SES counts every recipient (To, Cc and Bcc), not every message */
+export const RECIPIENTS_SQL = `greatest(1, cardinality(to_list) + cardinality(cc) + cardinality(bcc))`;
+const recipientsOf = (m: any) => Math.max(1, (m.to_list?.length ?? 0) + (m.cc?.length ?? 0) + (m.bcc?.length ?? 0));
+
 /** How many more emails may go out under DAILY_SEND_CAP (rolling 24 hours). */
 export async function remainingDailyCap(): Promise<number> {
   if (!config.dailySendCap) return Infinity;
-  const [row] = await query<{ n: number }>(`SELECT count(*)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours' AND NOT test`);
+  const [row] = await query<{ n: number }>(
+    `SELECT coalesce(sum(${RECIPIENTS_SQL}), 0)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours' AND NOT test`,
+  );
   return Math.max(0, config.dailySendCap - (row?.n ?? 0));
 }
 
@@ -42,12 +48,31 @@ export async function sendBatch(limit = config.maxSendRate) {
     }
     return 0;
   }
-  const batch = await claim(Math.min(limit, remaining));
+  const claimed = await claim(Math.min(limit, remaining));
+  // Keep the batch within the per-second budget counted in recipients; give back what doesn't fit
+  let budget = Math.min(limit, remaining);
+  const batch: any[] = [];
+  const back: string[] = [];
+  for (const m of claimed) {
+    const cost = recipientsOf(m);
+    if (batch.length === 0 || cost <= budget) {
+      batch.push(m);
+      budget -= cost;
+    } else back.push(m.id);
+  }
+  if (back.length) {
+    await query(`UPDATE messages SET status = 'queued', attempts = greatest(attempts - 1, 0), next_attempt_at = now() + interval '1 second' WHERE id = ANY($1)`, [back]);
+  }
   await Promise.all(
     batch.map((m) =>
       processMessage(m).catch(async (err) => {
         console.error(`message ${m.id} crashed`, err);
-        await query(`UPDATE messages SET status = 'queued', next_attempt_at = now() + interval '5 minutes', last_error = $2 WHERE id = $1`, [m.id, String(err).slice(0, 500)]);
+        // Only messages that never reached the provider go back to the queue
+        await query(
+          `UPDATE messages SET status = 'queued', next_attempt_at = now() + interval '5 minutes', last_error = $2
+           WHERE id = $1 AND status = 'sending' AND provider_message_id IS NULL`,
+          [m.id, String(err).slice(0, 500)],
+        );
       }),
     ),
   );
@@ -93,7 +118,7 @@ export function startWorker() {
   void every(5 * 60_000, 'backup', maybeRunScheduledBackup);
   // Messages stuck in "sending" after a crash go back to the queue.
   void every(60_000, 'recover', () =>
-    query(`UPDATE messages SET status = 'queued' WHERE status = 'sending' AND next_attempt_at < now() - interval '10 minutes'`),
+    query(`UPDATE messages SET status = 'queued' WHERE status = 'sending' AND provider_message_id IS NULL AND next_attempt_at < now() - interval '10 minutes'`),
   );
 }
 

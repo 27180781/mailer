@@ -163,9 +163,11 @@ export class SesProvider implements EmailProvider {
 
   async parseWebhook(_headers: Record<string, unknown>, body: string): Promise<ProviderEvent[]> {
     const msg = JSON.parse(body) as Record<string, string>;
-    if (!(await verifySnsMessage(msg))) throw new Error('חתימת SNS לא תקינה');
+    // Any AWS account can sign SNS messages, so the topic must be ours (checked first: no network call for strangers)
     const allowedTopic = process.env.SES_SNS_TOPIC_ARN;
-    if (allowedTopic && msg.TopicArn !== allowedTopic) throw new Error('נושא SNS לא מורשה');
+    if (!allowedTopic) throw new Error('SES_SNS_TOPIC_ARN לא מוגדר: התראות SNS נדחות עד שמגדירים את ה-topic המורשה');
+    if (msg.TopicArn !== allowedTopic) throw new Error('נושא SNS לא מורשה');
+    if (!(await verifySnsMessage(msg))) throw new Error('חתימת SNS לא תקינה');
 
     if (msg.Type === 'SubscriptionConfirmation') {
       const u = new URL(msg.SubscribeURL);

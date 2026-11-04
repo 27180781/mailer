@@ -23,9 +23,20 @@ const isPrimary = (msg: any, email: string) => email.toLowerCase() === String(ms
 
 /** Applies normalized provider events (delivery, bounce, complaint) to messages, contacts and suppressions. */
 export async function handleProviderEvents(events: ProviderEvent[], opts: { simulated?: boolean } = {}) {
+  let unmatched = 0;
   for (const ev of events) {
     const msg = await one('SELECT * FROM messages WHERE provider_message_id = $1', [ev.providerMessageId]);
-    if (!msg) continue;
+    if (!msg) {
+      unmatched++;
+      continue;
+    }
+    // Only a recipient of this very message can bounce or complain about it
+    const rcpt = ev.recipient.toLowerCase();
+    const own = [msg.to_email, ...(msg.to_list ?? []), ...(msg.cc ?? []), ...(msg.bcc ?? [])].map((e: string) => String(e).toLowerCase());
+    if (!own.includes(rcpt)) {
+      console.warn(`provider event for ${rcpt} ignored: not a recipient of message ${msg.id}`);
+      continue;
+    }
     const recipientStatus = { delivered: 'delivered', bounced: 'bounced', complained: 'complained', rejected: 'failed', delayed: 'delayed' }[ev.type];
     const kind = await updateRecipient(msg, ev.recipient, recipientStatus, ev.detail);
     const primary = isPrimary(msg, ev.recipient);
@@ -72,6 +83,7 @@ export async function handleProviderEvents(events: ProviderEvent[], opts: { simu
         break;
     }
   }
+  return { unmatched };
 }
 
 /**
