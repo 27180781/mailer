@@ -1,0 +1,90 @@
+[
+  {
+    "name": "from_email",
+    "type": "email",
+    "label": "כתובת השולח",
+    "required": true,
+    "help": "כתובת בדומיין שאומת במערכת."
+  },
+  {
+    "name": "from_name",
+    "type": "text",
+    "label": "שם השולח"
+  },
+  {
+    "name": "to",
+    "type": "array",
+    "label": "נמענים",
+    "required": true,
+    "spec": {
+      "type": "email",
+      "label": "מייל"
+    },
+    "help": "עד 50 כתובות."
+  },
+  {
+    "name": "reply_to",
+    "type": "email",
+    "label": "כתובת לתשובות"
+  },
+  {
+    "name": "subject",
+    "type": "text",
+    "label": "נושא",
+    "required": true
+  },
+  {
+    "name": "html",
+    "type": "text",
+    "label": "תוכן (HTML)",
+    "multiline": true
+  },
+  {
+    "name": "text",
+    "type": "text",
+    "label": "תוכן (טקסט רגיל)",
+    "multiline": true
+  },
+  {
+    "name": "type",
+    "type": "select",
+    "label": "סוג",
+    "required": true,
+    "default": "transactional",
+    "options": [
+      {
+        "label": "תפעולי (אישור הזמנה, חשבונית)",
+        "value": "transactional"
+      },
+      {
+        "label": "שיווקי (עם קישור הסרה)",
+        "value": "marketing"
+      }
+    ]
+  },
+  {
+    "name": "metadata",
+    "type": "array",
+    "label": "נתונים פנימיים",
+    "help": "חוזרים אליכם באירועי המייל, למשל order_id.",
+    "spec": [
+      {
+        "name": "key",
+        "type": "text",
+        "label": "שם",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "text",
+        "label": "ערך"
+      }
+    ]
+  },
+  {
+    "name": "idempotency_key",
+    "type": "text",
+    "label": "מפתח למניעת כפילות",
+    "help": "אם התרחיש ירוץ שוב עם אותו מפתח, המייל לא יישלח פעמיים."
+  }
+]

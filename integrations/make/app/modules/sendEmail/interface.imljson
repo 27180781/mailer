@@ -1,0 +1,32 @@
+[
+  {
+    "name": "id",
+    "type": "text",
+    "label": "מזהה המייל"
+  },
+  {
+    "name": "status",
+    "type": "text",
+    "label": "סטטוס"
+  },
+  {
+    "name": "message_id_header",
+    "type": "text",
+    "label": "Message-ID"
+  },
+  {
+    "name": "from_email",
+    "type": "email",
+    "label": "נשלח מ"
+  },
+  {
+    "name": "used_fallback",
+    "type": "boolean",
+    "label": "נשלח מכתובת גיבוי"
+  },
+  {
+    "name": "messages",
+    "type": "any",
+    "label": "כל ההודעות"
+  }
+]

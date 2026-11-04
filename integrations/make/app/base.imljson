@@ -1,0 +1,21 @@
+{
+  "baseUrl": "https://mail.retsef.co.il/v1",
+  "headers": {
+    "Authorization": "Bearer {{connection.apiKey}}"
+  },
+  "response": {
+    "error": {
+      "type": "RuntimeError",
+      "message": "[{{statusCode}}] {{body.error.message}}",
+      "429": {
+        "type": "RateLimitError",
+        "message": "{{body.error.message}}"
+      }
+    }
+  },
+  "log": {
+    "sanitize": [
+      "request.headers.authorization"
+    ]
+  }
+}

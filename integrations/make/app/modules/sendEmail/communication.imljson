@@ -1,0 +1,30 @@
+{
+  "url": "/emails",
+  "method": "POST",
+  "headers": {
+    "Idempotency-Key": "{{ifempty(parameters.idempotency_key; undefined)}}"
+  },
+  "body": {
+    "from": {
+      "email": "{{parameters.from_email}}",
+      "name": "{{ifempty(parameters.from_name; undefined)}}"
+    },
+    "to": "{{parameters.to}}",
+    "reply_to": "{{ifempty(parameters.reply_to; undefined)}}",
+    "subject": "{{parameters.subject}}",
+    "html": "{{ifempty(parameters.html; undefined)}}",
+    "text": "{{ifempty(parameters.text; undefined)}}",
+    "type": "{{parameters.type}}",
+    "metadata": "{{if(length(parameters.metadata) > 0; toCollection(parameters.metadata; \"key\"; \"value\"); emptycollection())}}"
+  },
+  "response": {
+    "output": {
+      "id": "{{body.messages[1].id}}",
+      "status": "{{body.messages[1].status}}",
+      "message_id_header": "{{body.messages[1].message_id_header}}",
+      "from_email": "{{body.from_email}}",
+      "used_fallback": "{{body.used_fallback}}",
+      "messages": "{{body.messages}}"
+    }
+  }
+}

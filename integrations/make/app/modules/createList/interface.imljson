@@ -1,0 +1,32 @@
+[
+  {
+    "name": "id",
+    "type": "text",
+    "label": "מזהה"
+  },
+  {
+    "name": "name",
+    "type": "text",
+    "label": "שם"
+  },
+  {
+    "name": "description",
+    "type": "text",
+    "label": "תיאור"
+  },
+  {
+    "name": "double_opt_in",
+    "type": "boolean",
+    "label": "הרשמה כפולה"
+  },
+  {
+    "name": "members",
+    "type": "number",
+    "label": "מנויים"
+  },
+  {
+    "name": "created_at",
+    "type": "date",
+    "label": "נוצרה"
+  }
+]

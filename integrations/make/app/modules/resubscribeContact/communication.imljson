@@ -1,0 +1,11 @@
+{
+  "url": "/contacts/{{encodeURL(parameters.contact)}}",
+  "method": "PATCH",
+  "body": {
+    "status": "active",
+    "consent_source": "{{parameters.consent_source}}"
+  },
+  "response": {
+    "output": "{{body}}"
+  }
+}

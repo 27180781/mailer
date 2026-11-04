@@ -1,0 +1,14 @@
+{
+  "name": "retzef-mailer-zapier",
+  "version": "1.0.0",
+  "description": "Zapier app for the Retzef mailer",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "zapier-platform-core": "19.3.0"
+  }
+}

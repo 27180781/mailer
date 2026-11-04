@@ -7,7 +7,7 @@ import { ApiError } from '../errors.js';
 import { getProvider } from '../providers/index.js';
 import { handleProviderEvents, recordEngagement } from '../services/events.js';
 import { unsubscribeContact } from '../services/suppression.js';
-import { emitEvent } from '../services/webhooks.js';
+import { contactPayload, emitEvent } from '../services/webhooks.js';
 import { clickSigValid, escapeHtml } from '../services/render.js';
 import { enqueueEmail } from '../services/send.js';
 import { checkDomain } from '../services/domains.js';
@@ -127,15 +127,19 @@ export async function publicRoutes(app: FastifyInstance) {
       `INSERT INTO contacts (account_id, email, name, consent_source, consent_at, consent_ip) VALUES ($1, $2, $3, $4, now(), $5)
        ON CONFLICT (account_id, email) DO UPDATE SET name = coalesce(EXCLUDED.name, contacts.name), consent_source = EXCLUDED.consent_source,
          consent_at = now(), consent_ip = EXCLUDED.consent_ip, updated_at = now()
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS inserted`,
       [list.account_id, b.email, b.name ?? null, `טופס הרשמה: ${list.name}`, req.ip],
     );
     const needsConfirm = list.double_opt_in && list.from_email;
+    const before = await one<{ status: string }>('SELECT status FROM list_members WHERE list_id = $1 AND contact_id = $2', [listId, contact.id]);
     await query(
       `INSERT INTO list_members (list_id, contact_id, status) VALUES ($1, $2, $3)
        ON CONFLICT (list_id, contact_id) DO UPDATE SET status = CASE WHEN list_members.status = 'confirmed' THEN 'confirmed' ELSE EXCLUDED.status END`,
       [listId, contact.id, needsConfirm ? 'pending' : 'confirmed'],
     );
+    const { inserted, ...c } = contact;
+    if (inserted) await emitEvent(list.account_id, 'contact.created', { contact: contactPayload(c), source: 'subscribe_form', list_id: listId });
+    if (!needsConfirm && before?.status !== 'confirmed') await emitEvent(list.account_id, 'contact.added_to_list', { contact: contactPayload(c), list_id: listId });
     if (needsConfirm) {
       const account = await one('SELECT * FROM accounts WHERE id = $1', [list.account_id]);
       const link = `${config.publicUrl}/confirm/${signToken(`${listId}:${contact.id}`)}`;
@@ -160,8 +164,12 @@ export async function publicRoutes(app: FastifyInstance) {
     const payload = verifyToken((req.params as any).token);
     const [listId, contactId] = payload?.split(':') ?? [];
     if (!listId || !contactId) return page(reply, 'הקישור לא תקין', '', 404);
+    const was = await one<{ status: string }>('SELECT status FROM list_members WHERE list_id = $1 AND contact_id = $2', [listId, contactId]);
     const row = await one(`UPDATE list_members SET status = 'confirmed' WHERE list_id = $1 AND contact_id = $2 AND status <> 'unsubscribed' RETURNING list_id`, [listId, contactId]);
-    if (row) await query(`UPDATE contacts SET consent_at = now() WHERE id = $1`, [contactId]);
+    if (row && was?.status === 'pending') {
+      const c = await one(`UPDATE contacts SET consent_at = now() WHERE id = $1 RETURNING *`, [contactId]);
+      if (c) await emitEvent(c.account_id, 'contact.added_to_list', { contact: contactPayload(c), list_id: listId });
+    }
     return page(reply, row ? 'ההרשמה אושרה' : 'הקישור כבר לא בתוקף', row ? '<p>תודה! מעכשיו תקבלו את הדיוורים שלנו.</p>' : '');
   });
 

@@ -1,0 +1,9 @@
+[
+  {
+    "name": "apiKey",
+    "type": "password",
+    "label": "מפתח API",
+    "required": true,
+    "help": "יוצרים מפתח במערכת הדיוור, במסך **מפתחות API**. המפתח מתחיל ב-`mk_live_`, או ב-`mk_test_` לבדיקות בלי שליחה אמיתית."
+  }
+]

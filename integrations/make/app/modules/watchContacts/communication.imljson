@@ -1,0 +1,9 @@
+{
+  "output": {
+    "event": "{{body.type}}",
+    "created_at": "{{body.created_at}}",
+    "list_id": "{{body.data.list_id}}",
+    "source": "{{body.data.source}}",
+    "contact": "{{body.data.contact}}"
+  }
+}

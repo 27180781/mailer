@@ -30,7 +30,14 @@ info:
     המערכת שולחת `POST` עם JSON לכתובת שהגדרתם, על כל אירוע:
     `email.sent`, `email.delivered`, `email.delayed`, `email.bounced`, `email.complained`, `email.failed`,
     `email.suppressed`, `email.opened`, `email.clicked`, `email.unsubscribed`,
-    `domain.verified`, `domain.failed`, `domain.degraded`, `campaign.paused`, `campaign.finished`, `account.suspended`.
+    `domain.verified`, `domain.failed`, `domain.degraded`, `campaign.paused`, `campaign.finished`, `account.suspended`,
+    `contact.created`, `contact.updated`, `contact.unsubscribed`, `contact.deleted`, `contact.added_to_list`, `contact.removed_from_list`.
+
+    באירועי `contact.*` השדה `data.contact` מכיל את איש הקשר (`id`, `email`, `name`, `status`, `attributes`), ובאירועי רשימה גם `data.list_id`.
+    ייבוא מרוכז (`/v1/contacts/import`) לא שולח אירועי `contact.*`.
+
+    ## Zapier ו-Make
+    יש אפליקציות מוכנות לשתי המערכות. ההתחברות היא במפתח API (`mk_live_…`), וה-triggers נרשמים לבד דרך `/v1/webhooks`.
 
     גוף הבקשה: `{"type": "email.delivered", "created_at": "...", "data": {"message_id": "...", "recipient": "...", "recipient_type": "to", "metadata": {...}}}`.
 
@@ -185,15 +192,49 @@ paths:
       parameters:
         - { in: query, name: search, schema: { type: string } }
         - { in: query, name: list_id, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { type: string, enum: [active, unsubscribed, bounced, complained] } }
+        - { in: query, name: email, description: 'התאמה מדויקת לכתובת', schema: { type: string } }
         - { $ref: '#/components/parameters/limit' }
         - { $ref: '#/components/parameters/offset' }
       responses: { '200': { description: 'OK: { total, items }' } }
     post:
       tags: [אנשי קשר ורשימות]
-      summary: הוספה או עדכון של איש קשר
+      summary: הוספה או עדכון של איש קשר (לפי המייל)
+      description: אם כבר יש איש קשר עם המייל הזה, הוא מתעדכן (השם, ו-attributes מתמזגים). מנוי שהוסר לא חוזר להיות פעיל בדרך הזו.
       requestBody:
         content: { application/json: { schema: { $ref: '#/components/schemas/ContactInput' } } }
-      responses: { '201': { description: נוצר } }
+      responses:
+        '201': { description: 'נוצר (created: true)' }
+        '200': { description: 'עודכן איש קשר קיים (created: false)' }
+  /v1/contacts/{contact}:
+    parameters:
+      - { in: path, name: contact, required: true, description: 'מזהה איש הקשר או כתובת המייל שלו', schema: { type: string }, example: dana@example.com }
+    get:
+      tags: [אנשי קשר ורשימות]
+      summary: איש קשר לפי מזהה או מייל, כולל הרשימות שלו
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/Error' } }
+    patch:
+      tags: [אנשי קשר ורשימות]
+      summary: עדכון איש קשר, הסרה מדיוור, ושיוך לרשימות
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, description: שינוי כתובת המייל }
+                name: { type: string, nullable: true }
+                attributes: { type: object, description: 'מתמזג עם הקיים, אלא אם replace_attributes: true' }
+                replace_attributes: { type: boolean, default: false }
+                status: { type: string, enum: [active, unsubscribed], description: 'unsubscribed מסיר מכל הדיוורים. active מחזיר מנוי שהוסר, ודורש consent_source' }
+                consent_source: { type: string, example: "נרשם מחדש באתר" }
+                add_list_ids: { type: array, items: { type: string, format: uuid } }
+                remove_list_ids: { type: array, items: { type: string, format: uuid } }
+      responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } }
+    delete:
+      tags: [אנשי קשר ורשימות]
+      summary: מחיקת איש קשר
+      responses: { '200': { description: OK } }
   /v1/contacts/import:
     post:
       tags: [אנשי קשר ורשימות]
@@ -221,10 +262,18 @@ paths:
   /v1/lists/{id}/members:
     post:
       tags: [אנשי קשר ורשימות]
-      summary: הוספת אנשי קשר לרשימה
+      summary: הוספת אנשי קשר קיימים לרשימה, לפי מזהה או מייל
       parameters: [{ $ref: '#/components/parameters/id' }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { contact_ids: { type: array, items: { type: string, format: uuid } } } } } } }
-      responses: { '200': { description: 'OK: { added }' } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { contact_ids: { type: array, items: { type: string, format: uuid } }, emails: { type: array, items: { type: string } } } } } } }
+      responses: { '200': { description: 'OK: { added, not_found } — כתובות שאין להן איש קשר חוזרות ב-not_found' } }
+  /v1/lists/{id}/members/{contact}:
+    delete:
+      tags: [אנשי קשר ורשימות]
+      summary: הוצאת איש קשר מרשימה (לפי מזהה או מייל)
+      parameters:
+        - { $ref: '#/components/parameters/id' }
+        - { in: path, name: contact, required: true, schema: { type: string } }
+      responses: { '200': { description: 'OK: { removed }' } }
   /v1/campaigns:
     get: { tags: [דיוורים], summary: רשימת דיוורים, responses: { '200': { description: OK } } }
     post:

@@ -1,0 +1,7 @@
+{
+  "name": "watchContacts",
+  "label": "אירועי מנויים",
+  "type": "instant_trigger",
+  "webhook": "contactEvents",
+  "description": "מפעיל את התרחיש מיד כשמנוי נוסף, מצטרף לרשימה, מסיר את עצמו ועוד. ייבוא מרוכז של קובץ לא מפעיל אותו."
+}

@@ -1,0 +1,15 @@
+[
+  {
+    "name": "contact",
+    "type": "text",
+    "label": "מייל או מזהה של איש הקשר",
+    "required": true
+  },
+  {
+    "name": "consent_source",
+    "type": "text",
+    "label": "מקור ההסכמה החדשה",
+    "required": true,
+    "help": "למשל \"נרשם מחדש בטופס באתר\"."
+  }
+]

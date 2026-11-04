@@ -1,0 +1,48 @@
+[
+  {
+    "name": "search",
+    "type": "text",
+    "label": "טקסט לחיפוש",
+    "help": "חלק מהמייל או מהשם."
+  },
+  {
+    "name": "list_id",
+    "type": "select",
+    "label": "רשימה",
+    "required": false,
+    "multiple": false,
+    "options": "rpc://listLists"
+  },
+  {
+    "name": "status",
+    "type": "select",
+    "label": "סטטוס",
+    "options": [
+      {
+        "label": "פעיל",
+        "value": "active"
+      },
+      {
+        "label": "הוסר",
+        "value": "unsubscribed"
+      },
+      {
+        "label": "חזר (bounce)",
+        "value": "bounced"
+      },
+      {
+        "label": "סימן כספאם",
+        "value": "complained"
+      }
+    ]
+  },
+  {
+    "name": "limit",
+    "type": "uinteger",
+    "label": "כמה להחזיר לכל היותר",
+    "default": 50,
+    "validate": {
+      "max": 500
+    }
+  }
+]

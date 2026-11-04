@@ -1,0 +1,6 @@
+{
+  "name": "createList",
+  "label": "יצירת רשימה",
+  "description": "יוצר רשימת תפוצה חדשה.",
+  "type": "action"
+}

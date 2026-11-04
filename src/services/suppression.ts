@@ -1,4 +1,5 @@
 import { one, query } from '../db.js';
+import { contactPayload, emitEvent } from './webhooks.js';
 
 /**
  * Returns the suppression reason for an address, or null.
@@ -31,9 +32,13 @@ export async function suppress(accountId: string | null, email: string, reason: 
 
 export async function unsubscribeContact(accountId: string, email: string) {
   await suppress(accountId, email, 'unsubscribe');
-  await query(`UPDATE contacts SET status = 'unsubscribed', updated_at = now() WHERE account_id = $1 AND email = $2 AND status = 'active'`, [accountId, email.toLowerCase()]);
+  const changed = await query(
+    `UPDATE contacts SET status = 'unsubscribed', updated_at = now() WHERE account_id = $1 AND email = $2 AND status = 'active' RETURNING *`,
+    [accountId, email.toLowerCase()],
+  );
   await query(
     `UPDATE list_members SET status = 'unsubscribed' WHERE contact_id IN (SELECT id FROM contacts WHERE account_id = $1 AND email = $2)`,
     [accountId, email.toLowerCase()],
   );
+  for (const c of changed) await emitEvent(accountId, 'contact.unsubscribed', { contact: contactPayload(c) });
 }

@@ -78,8 +78,8 @@
 | `GET/POST /v1/domains`, `GET/DELETE /v1/domains/:id`, `POST /v1/domains/:id/verify` | דומיינים |
 | `GET/POST /v1/senders`, `GET/PATCH/DELETE /v1/senders/:id`, `POST /v1/senders/:id/domains` | שולחים (חשבון פלטפורמה בלבד) |
 | `POST /v1/senders/resolve` | בדיקה מאיזו כתובת מייל ייצא בפועל, בלי לשלוח |
-| `GET/POST /v1/contacts`, `POST /v1/contacts/import`, `GET/PATCH/DELETE /v1/contacts/:id` | אנשי קשר |
-| `GET/POST /v1/lists`, `PATCH/DELETE /v1/lists/:id`, `POST /v1/lists/:id/members` | רשימות |
+| `GET/POST /v1/contacts`, `POST /v1/contacts/import`, `GET/PATCH/DELETE /v1/contacts/:id` | אנשי קשר. `:id` יכול להיות גם כתובת המייל. `PATCH` משנה פרטים, מסיר מדיוור (`status`) ומצרף לרשימות או מוציא מהן |
+| `GET/POST /v1/lists`, `PATCH/DELETE /v1/lists/:id`, `POST /v1/lists/:id/members`, `DELETE /v1/lists/:id/members/:contact` | רשימות. אפשר לצרף לפי מזהים או לפי מיילים |
 | `GET/POST /v1/templates`, `GET/PATCH/DELETE /v1/templates/:id` | תבניות |
 | `GET/POST /v1/campaigns`, `GET/PATCH/DELETE /v1/campaigns/:id` | דיוורים |
 | `POST /v1/campaigns/:id/test`, `/send`, `/pause`, `/resume`, `/cancel`, `GET /v1/campaigns/:id/stats` | פעולות על דיוור |
@@ -112,7 +112,11 @@ curl https://mail.example.co.il/v1/emails \
 ### Webhooks
 
 כל אירוע נשלח ב-POST עם הכותרת `X-Mailer-Signature: t=<unix>,v1=<hmac>`. החתימה היא HMAC-SHA256 (base64url) של `<t>.<body>` עם סוד ה-webhook.
-האירועים: `email.sent`, `email.delivered`, `email.bounced`, `email.complained`, `email.failed`, `email.suppressed`, `email.opened`, `email.clicked`, `email.unsubscribed`, `domain.verified`, `domain.failed`, `domain.degraded`, `campaign.paused`, `campaign.finished`.
+האירועים: `email.sent`, `email.delivered`, `email.bounced`, `email.complained`, `email.failed`, `email.suppressed`, `email.opened`, `email.clicked`, `email.unsubscribed`, `domain.verified`, `domain.failed`, `domain.degraded`, `campaign.paused`, `campaign.finished`, `contact.created`, `contact.updated`, `contact.unsubscribed`, `contact.deleted`, `contact.added_to_list`, `contact.removed_from_list`.
+
+### Zapier ו-Make
+
+יש אפליקציות מוכנות: [integrations/zapier](integrations/zapier/README.md) ו-[integrations/make](integrations/make/README.md). בשתיהן אפשר להוסיף ולעדכן מנויים, להסיר אותם מהדיוור, לשייך לרשימות ולשלוח מיילים. ה-triggers מיידיים, דרך webhooks.
 
 ## פיתוח
 

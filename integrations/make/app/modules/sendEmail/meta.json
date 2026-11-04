@@ -1,0 +1,6 @@
+{
+  "name": "sendEmail",
+  "label": "שליחת מייל",
+  "description": "שולח מייל מכתובת בדומיין מאומת בחשבון.",
+  "type": "action"
+}

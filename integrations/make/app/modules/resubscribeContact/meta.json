@@ -1,0 +1,6 @@
+{
+  "name": "resubscribeContact",
+  "label": "החזרת מנוי שהוסר",
+  "description": "מחזיר לדיוור מנוי שהסיר את עצמו, אחרי שנתן הסכמה מחדש.",
+  "type": "action"
+}

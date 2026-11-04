@@ -1,0 +1,7 @@
+{
+  "id": "c1b82e6c-1111-4c3a-9a51-1c0b8b2a7e10",
+  "status": "queued",
+  "message_id_header": "<c1b82e6c@mail.example.co.il>",
+  "from_email": "news@example.co.il",
+  "used_fallback": false
+}

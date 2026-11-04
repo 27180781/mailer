@@ -1,0 +1,11 @@
+{
+  "event": "email.delivered",
+  "created_at": "2026-11-04T10:00:00.000Z",
+  "message_id": "c1b82e6c-1111-4c3a-9a51-1c0b8b2a7e10",
+  "to": "dana@example.com",
+  "recipient": "dana@example.com",
+  "recipient_type": "to",
+  "metadata": {
+    "order_id": "1234"
+  }
+}

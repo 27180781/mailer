@@ -1,0 +1,6 @@
+{
+  "name": "listContacts",
+  "label": "חיפוש מנויים",
+  "description": "מחזיר אנשי קשר לפי טקסט, רשימה או סטטוס.",
+  "type": "search"
+}

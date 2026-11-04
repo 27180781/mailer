@@ -1,0 +1,8 @@
+{
+  "url": "/lists",
+  "method": "GET",
+  "response": {
+    "iterate": "{{body}}",
+    "output": "{{item}}"
+  }
+}

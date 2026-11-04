@@ -1,0 +1,16 @@
+[
+  {
+    "name": "list_id",
+    "type": "select",
+    "label": "רשימה",
+    "required": true,
+    "multiple": false,
+    "options": "rpc://listLists"
+  },
+  {
+    "name": "contact",
+    "type": "text",
+    "label": "מייל או מזהה של איש הקשר",
+    "required": true
+  }
+]

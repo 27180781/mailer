@@ -1,0 +1,15 @@
+{
+  "url": "/contacts",
+  "method": "GET",
+  "qs": {
+    "search": "{{ifempty(parameters.search; undefined)}}",
+    "list_id": "{{ifempty(parameters.list_id; undefined)}}",
+    "status": "{{ifempty(parameters.status; undefined)}}",
+    "limit": "{{ifempty(parameters.limit; 50)}}"
+  },
+  "response": {
+    "iterate": "{{body.items}}",
+    "output": "{{item}}",
+    "limit": "{{ifempty(parameters.limit; 50)}}"
+  }
+}

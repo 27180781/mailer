@@ -1,0 +1,12 @@
+{
+  "url": "/contacts/{{encodeURL(parameters.contact)}}",
+  "method": "PATCH",
+  "body": {
+    "remove_list_ids": [
+      "{{parameters.list_id}}"
+    ]
+  },
+  "response": {
+    "output": "{{body}}"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "url": "/contacts",
+  "method": "POST",
+  "body": {
+    "email": "{{parameters.email}}",
+    "name": "{{ifempty(parameters.name; undefined)}}",
+    "attributes": "{{if(length(parameters.attributes) > 0; toCollection(parameters.attributes; \"key\"; \"value\"); emptycollection())}}",
+    "consent_source": "{{ifempty(parameters.consent_source; undefined)}}",
+    "list_ids": "{{ifempty(parameters.list_ids; emptyarray)}}"
+  },
+  "response": {
+    "output": "{{body}}"
+  }
+}

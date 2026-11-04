@@ -1,0 +1,20 @@
+{
+  "url": "https://mail.retsef.co.il/v1/me",
+  "headers": {
+    "Authorization": "Bearer {{parameters.apiKey}}"
+  },
+  "response": {
+    "metadata": {
+      "type": "text",
+      "value": "{{body.account.name}}"
+    },
+    "error": {
+      "message": "{{body.error.message}}"
+    }
+  },
+  "log": {
+    "sanitize": [
+      "request.headers.authorization"
+    ]
+  }
+}

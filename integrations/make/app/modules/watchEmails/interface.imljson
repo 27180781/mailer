@@ -1,0 +1,57 @@
+[
+  {
+    "name": "event",
+    "type": "text",
+    "label": "סוג האירוע"
+  },
+  {
+    "name": "created_at",
+    "type": "date",
+    "label": "זמן"
+  },
+  {
+    "name": "message_id",
+    "type": "text",
+    "label": "מזהה המייל"
+  },
+  {
+    "name": "to",
+    "type": "email",
+    "label": "נשלח אל"
+  },
+  {
+    "name": "recipient",
+    "type": "email",
+    "label": "נמען"
+  },
+  {
+    "name": "recipient_type",
+    "type": "text",
+    "label": "סוג נמען"
+  },
+  {
+    "name": "campaign_id",
+    "type": "text",
+    "label": "מזהה הדיוור"
+  },
+  {
+    "name": "url",
+    "type": "url",
+    "label": "הקישור שנלחץ"
+  },
+  {
+    "name": "bounce_type",
+    "type": "text",
+    "label": "סוג החזרה"
+  },
+  {
+    "name": "metadata",
+    "type": "any",
+    "label": "נתונים פנימיים"
+  },
+  {
+    "name": "data",
+    "type": "any",
+    "label": "כל הנתונים"
+  }
+]

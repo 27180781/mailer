@@ -1,0 +1,46 @@
+[
+  {
+    "name": "email",
+    "type": "email",
+    "label": "מייל",
+    "required": true
+  },
+  {
+    "name": "name",
+    "type": "text",
+    "label": "שם"
+  },
+  {
+    "name": "list_ids",
+    "type": "select",
+    "label": "רשימות",
+    "required": false,
+    "multiple": true,
+    "options": "rpc://listLists"
+  },
+  {
+    "name": "attributes",
+    "type": "array",
+    "label": "שדות נוספים",
+    "help": "למשל city = חיפה. אפשר להשתמש בהם בתבניות: {{city}}.",
+    "spec": [
+      {
+        "name": "key",
+        "type": "text",
+        "label": "שם השדה",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "text",
+        "label": "ערך"
+      }
+    ]
+  },
+  {
+    "name": "consent_source",
+    "type": "text",
+    "label": "מקור ההסכמה",
+    "help": "מאיפה הגיעה ההסכמה לקבל דיוור (למשל \"טופס באתר\"). חובה לפי חוק התקשורת כשמכניסים מנוי לרשימת דיוור."
+  }
+]

@@ -18,7 +18,25 @@ export const WEBHOOK_EVENTS = [
   'campaign.paused',
   'campaign.finished',
   'account.suspended',
+  'contact.created',
+  'contact.updated',
+  'contact.unsubscribed',
+  'contact.deleted',
+  'contact.added_to_list',
+  'contact.removed_from_list',
 ] as const;
+
+/** The contact fields sent in contact.* webhooks and returned by the API */
+export const contactPayload = (c: any) => ({
+  id: c.id,
+  email: c.email,
+  name: c.name ?? null,
+  status: c.status,
+  attributes: c.attributes ?? {},
+  consent_source: c.consent_source ?? null,
+  created_at: c.created_at,
+  updated_at: c.updated_at,
+});
 
 export function newWebhookSecret() {
   return `whsec_${randomToken(24)}`;

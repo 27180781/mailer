@@ -1,0 +1,12 @@
+{
+  "url": "/contacts",
+  "method": "GET",
+  "qs": {
+    "email": "{{parameters.email}}",
+    "limit": 1
+  },
+  "response": {
+    "iterate": "{{body.items}}",
+    "output": "{{item}}"
+  }
+}

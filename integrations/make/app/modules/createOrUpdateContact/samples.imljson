@@ -1,0 +1,20 @@
+{
+  "id": "6f1c2a54-2b51-4d1e-9a51-1c0b8b2a7e10",
+  "email": "dana@example.com",
+  "name": "דנה כהן",
+  "status": "active",
+  "attributes": {
+    "city": "חיפה"
+  },
+  "consent_source": "טופס באתר",
+  "lists": [
+    {
+      "id": "0b5b3f6e-6a3c-4c0e-8f53-6a0e6c3a1f22",
+      "name": "לקוחות",
+      "status": "confirmed"
+    }
+  ],
+  "created_at": "2026-11-04T10:00:00.000Z",
+  "updated_at": "2026-11-04T10:00:00.000Z",
+  "created": true
+}

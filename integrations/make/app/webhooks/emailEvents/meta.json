@@ -1,0 +1,6 @@
+{
+  "name": "emailEvents",
+  "label": "אירועי מיילים",
+  "type": "dedicated (attached)",
+  "connection": "connection"
+}

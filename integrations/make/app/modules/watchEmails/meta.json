@@ -1,0 +1,7 @@
+{
+  "name": "watchEmails",
+  "label": "אירועי מיילים",
+  "type": "instant_trigger",
+  "webhook": "emailEvents",
+  "description": "מפעיל את התרחיש כשמייל נמסר, נפתח, חזר, סומן כספאם ועוד."
+}

@@ -9,8 +9,8 @@ import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '..
 import { bimiRecordValue, bimiStatus, validateBimiSvg, validateCertificate } from '../services/bimi.js';
 import { enqueueEmail, resolveFrom, sentToday } from '../services/send.js';
 import { campaignStats } from '../services/campaigns.js';
-import { newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
-import { suppress } from '../services/suppression.js';
+import { contactPayload, emitEvent, newWebhookSecret, WEBHOOK_EVENTS } from '../services/webhooks.js';
+import { suppress, unsubscribeContact } from '../services/suppression.js';
 import { runAutoTrust, trustInfo } from '../services/trust.js';
 import { backupConfig, backupConfigured, backupStatus, listBackups, runBackup } from '../services/backup.js';
 import { applyRecords } from '../services/cloudflare.js';
@@ -28,6 +28,8 @@ const namedAddress = z.string().transform((v, ctx) => {
 });
 const looseEmail = namedAddress.transform((a) => a.email);
 const uuid = z.string().uuid('מזהה לא תקין');
+/** Automation tools (Make, Zapier) send "" for fields left empty: treat it as not given */
+const blank = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const page = z.object({ limit: z.coerce.number().int().min(1).max(500).default(50), offset: z.coerce.number().int().min(0).default(0) });
 
 const attachment = z.object({
@@ -43,7 +45,7 @@ const sendSchema = z
     sender_id: uuid.nullish(),
     from: z.union([namedAddress, z.object({ email, name: z.string().max(120).nullish() })]),
     fallback: z.enum(['platform', 'reject']).default('reject'),
-    reply_to: z.union([looseEmail, z.array(looseEmail).max(1).transform((a) => a[0])]).nullish(),
+    reply_to: z.preprocess(blank, z.union([looseEmail, z.array(looseEmail).max(1).transform((a) => a[0])]).nullish()),
     to: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).min(1).max(50)]),
     cc: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).max(49)]).default([]),
     bcc: z.union([looseEmail.transform((e) => [e]), z.array(looseEmail).max(49)]).default([]),
@@ -69,6 +71,14 @@ const sendSchema = z
 function publicAccount(a: any) {
   const { paused_reason, ...rest } = a;
   return { ...rest, paused_reason };
+}
+
+/** A contact by its id or by its email address (handy for Zapier, Make and CRMs that only know the email). */
+async function findContact(ref: string, accountId: string) {
+  const byId = uuid.safeParse(ref).success;
+  const row = await one(`SELECT * FROM contacts WHERE account_id = $1 AND ${byId ? 'id = $2::uuid' : 'email = lower(trim($2))'}`, [accountId, ref]);
+  if (!row) throw notFound('איש הקשר');
+  return row;
 }
 
 async function owned(table: string, id: string, accountId: string, what: string) {
@@ -448,20 +458,27 @@ export async function apiRoutes(app: FastifyInstance) {
     // ---------- Contacts ----------
     const contactBody = z.object({
       email,
-      name: z.string().max(200).nullish(),
+      name: z.preprocess(blank, z.string().max(200).nullish()),
       attributes: z.record(z.unknown()).default({}),
-      consent_source: z.string().max(200).nullish(),
-      list_ids: z.array(uuid).default([]),
+      consent_source: z.preprocess(blank, z.string().max(200).nullish()),
+      list_ids: z.preprocess((v) => (Array.isArray(v) ? v.filter((x) => blank(x) !== undefined) : v), z.array(uuid).default([])),
     });
     r.get('/v1/contacts', async (req) => {
-      const q = page.extend({ search: z.string().optional(), list_id: uuid.optional(), status: z.string().optional() }).parse(req.query);
+      const q = page
+        .extend({
+          search: z.preprocess(blank, z.string().optional()),
+          email: z.preprocess(blank, email.optional()),
+          list_id: z.preprocess(blank, uuid.optional()),
+          status: z.preprocess(blank, z.string().optional()),
+        })
+        .parse(req.query);
       const rows = await query(
         `SELECT c.*, count(*) OVER() AS total FROM contacts c
          WHERE c.account_id = $1 AND ($2::text IS NULL OR c.email ILIKE '%' || $2 || '%' OR c.name ILIKE '%' || $2 || '%')
            AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM list_members lm WHERE lm.contact_id = c.id AND lm.list_id = $3))
-           AND ($4::text IS NULL OR c.status = $4)
+           AND ($4::text IS NULL OR c.status = $4) AND ($7::text IS NULL OR c.email = $7)
          ORDER BY c.created_at DESC LIMIT $5 OFFSET $6`,
-        [req.auth.account.id, q.search ?? null, q.list_id ?? null, q.status ?? null, q.limit, q.offset],
+        [req.auth.account.id, q.search ?? null, q.list_id ?? null, q.status ?? null, q.limit, q.offset, q.email ?? null],
       );
       return { total: Number(rows[0]?.total ?? 0), items: rows.map(({ total, ...c }) => c) };
     });
@@ -472,20 +489,31 @@ export async function apiRoutes(app: FastifyInstance) {
          VALUES ($1, $2, $3, $4, $5, CASE WHEN $5::text IS NULL THEN NULL ELSE now() END, $6)
          ON CONFLICT (account_id, email) DO UPDATE SET name = coalesce(EXCLUDED.name, contacts.name),
            attributes = contacts.attributes || EXCLUDED.attributes, updated_at = now()
-         RETURNING *`,
+         RETURNING *, (xmax = 0) AS inserted`,
         [accountId, c.email, c.name ?? null, JSON.stringify(c.attributes), c.consent_source ?? null, ip],
       );
+      const addedTo: string[] = [];
       for (const listId of c.list_ids) {
-        await run(
-          `INSERT INTO list_members (list_id, contact_id, status) SELECT $1, $2, 'confirmed' FROM lists WHERE id = $1 AND account_id = $3 ON CONFLICT DO NOTHING`,
+        const added = await run(
+          `INSERT INTO list_members (list_id, contact_id, status) SELECT $1, $2, 'confirmed' FROM lists WHERE id = $1 AND account_id = $3 ON CONFLICT DO NOTHING RETURNING list_id`,
           [listId, row.id, accountId],
         );
+        if (added.length) addedTo.push(listId);
       }
-      return row;
+      return { row, addedTo };
     }
+    async function contactLists(contactId: string) {
+      return query('SELECT l.id, l.name, lm.status FROM list_members lm JOIN lists l ON l.id = lm.list_id WHERE lm.contact_id = $1 ORDER BY l.name', [contactId]);
+    }
+    /** Create or update by email. 201 when created, 200 when the contact already existed. */
     r.post('/v1/contacts', async (req, reply) => {
-      reply.code(201);
-      return upsertContact(req.auth.account.id, contactBody.parse(req.body), req.ip);
+      const accountId = req.auth.account.id;
+      const { row, addedTo } = await upsertContact(accountId, contactBody.parse(req.body), req.ip);
+      const { inserted, ...c } = row;
+      await emitEvent(accountId, inserted ? 'contact.created' : 'contact.updated', { contact: contactPayload(c) });
+      for (const listId of addedTo) await emitEvent(accountId, 'contact.added_to_list', { contact: contactPayload(c), list_id: listId });
+      reply.code(inserted ? 201 : 200);
+      return { ...c, created: inserted, lists: await contactLists(c.id) };
     });
     r.post('/v1/contacts/import', async (req) => {
       const b = z
@@ -497,31 +525,78 @@ export async function apiRoutes(app: FastifyInstance) {
         })
         .parse(req.body);
       const accountId = req.auth.account.id;
+      // Bulk imports don't fire contact.* webhooks (thousands of calls to Zapier/Make)
       const count = await tx(async (client) => {
         for (const c of b.contacts) await upsertContact(accountId, { ...c, list_ids: b.list_ids, consent_source: b.consent_source }, req.ip, client);
         return b.contacts.length;
       });
       return { imported: count };
     });
+    const contactRef = z.object({ id: z.string().min(1).max(320) });
     r.get('/v1/contacts/:id', async (req) => {
-      const { id } = z.object({ id: uuid }).parse(req.params);
-      const c = await owned('contacts', id, req.auth.account.id, 'איש הקשר');
-      const lists = await query('SELECT l.id, l.name, lm.status FROM list_members lm JOIN lists l ON l.id = lm.list_id WHERE lm.contact_id = $1', [id]);
-      return { ...c, lists };
+      const c = await findContact(contactRef.parse(req.params).id, req.auth.account.id);
+      return { ...c, lists: await contactLists(c.id) };
     });
     r.patch('/v1/contacts/:id', async (req) => {
-      const { id } = z.object({ id: uuid }).parse(req.params);
-      await owned('contacts', id, req.auth.account.id, 'איש הקשר');
-      const b = z.object({ name: z.string().max(200).nullish(), attributes: z.record(z.unknown()).optional() }).parse(req.body);
-      return one(
-        `UPDATE contacts SET name = CASE WHEN $2::boolean THEN $3 ELSE name END, attributes = coalesce($4, attributes), updated_at = now() WHERE id = $1 RETURNING *`,
-        [id, b.name !== undefined, b.name ?? null, b.attributes ? JSON.stringify(b.attributes) : null],
+      const accountId = req.auth.account.id;
+      const cur = await findContact(contactRef.parse(req.params).id, accountId);
+      const b = z
+        .object({
+          email: z.preprocess(blank, email.optional()),
+          name: z.preprocess(blank, z.string().max(200).nullish()),
+          attributes: z.record(z.unknown()).optional(),
+          /** true replaces attributes; by default the given keys are merged in */
+          replace_attributes: z.boolean().default(false),
+          status: z.preprocess(blank, z.enum(['active', 'unsubscribed']).optional()),
+          consent_source: z.preprocess(blank, z.string().max(200).optional()),
+          add_list_ids: z.array(uuid).default([]),
+          remove_list_ids: z.array(uuid).default([]),
+        })
+        .parse(req.body ?? {});
+      if (b.email && b.email !== cur.email) {
+        const taken = await one('SELECT 1 FROM contacts WHERE account_id = $1 AND email = $2', [accountId, b.email]);
+        if (taken) throw new ApiError(409, 'email_taken', 'כבר יש איש קשר עם הכתובת הזו');
+      }
+      if (b.status === 'active' && cur.status !== 'active') {
+        if (cur.status !== 'unsubscribed') throw new ApiError(409, 'cannot_resubscribe', 'אי אפשר להחזיר כתובת שחזרה (bounce) או שהתלוננה על ספאם');
+        if (!b.consent_source || b.consent_source.trim().length < 3) throw new ApiError(400, 'consent_required', 'כדי להחזיר מנוי שהוסר צריך לציין מאיפה הגיעה ההסכמה החדשה (consent_source)');
+      }
+      let c = await one(
+        `UPDATE contacts SET email = coalesce($2, email), name = CASE WHEN $3::boolean THEN $4 ELSE name END,
+           attributes = CASE WHEN $5::jsonb IS NULL THEN attributes WHEN $6 THEN $5::jsonb ELSE attributes || $5::jsonb END, updated_at = now()
+         WHERE id = $1 RETURNING *`,
+        [cur.id, b.email ?? null, b.name !== undefined, b.name ?? null, b.attributes ? JSON.stringify(b.attributes) : null, b.replace_attributes],
       );
+      if (b.status === 'unsubscribed' && cur.status === 'active') {
+        await unsubscribeContact(accountId, c.email);
+      } else if (b.status === 'active' && cur.status === 'unsubscribed') {
+        await query(`DELETE FROM suppressions WHERE account_id = $1 AND email = $2 AND reason = 'unsubscribe'`, [accountId, c.email]);
+        await query(`UPDATE contacts SET status = 'active', consent_source = $2, consent_at = now(), consent_ip = $3, updated_at = now() WHERE id = $1`, [c.id, b.consent_source, req.ip]);
+        await query(`UPDATE list_members SET status = 'confirmed' WHERE contact_id = $1 AND status = 'unsubscribed'`, [c.id]);
+      }
+      for (const listId of b.add_list_ids) {
+        const added = await query(
+          `INSERT INTO list_members (list_id, contact_id, status) SELECT $1, $2, 'confirmed' FROM lists WHERE id = $1 AND account_id = $3 ON CONFLICT DO NOTHING RETURNING list_id`,
+          [listId, c.id, accountId],
+        );
+        if (added.length) await emitEvent(accountId, 'contact.added_to_list', { contact: contactPayload(c), list_id: listId });
+      }
+      for (const listId of b.remove_list_ids) {
+        const removed = await query(
+          `DELETE FROM list_members lm USING lists l WHERE lm.list_id = $1 AND lm.contact_id = $2 AND l.id = lm.list_id AND l.account_id = $3 RETURNING lm.list_id`,
+          [listId, c.id, accountId],
+        );
+        if (removed.length) await emitEvent(accountId, 'contact.removed_from_list', { contact: contactPayload(c), list_id: listId });
+      }
+      c = await one('SELECT * FROM contacts WHERE id = $1', [c.id]);
+      await emitEvent(accountId, 'contact.updated', { contact: contactPayload(c) });
+      return { ...c, lists: await contactLists(c.id) };
     });
     r.delete('/v1/contacts/:id', async (req) => {
-      const { id } = z.object({ id: uuid }).parse(req.params);
-      await owned('contacts', id, req.auth.account.id, 'איש הקשר');
-      await query('DELETE FROM contacts WHERE id = $1', [id]);
+      const accountId = req.auth.account.id;
+      const c = await findContact(contactRef.parse(req.params).id, accountId);
+      await query('DELETE FROM contacts WHERE id = $1', [c.id]);
+      await emitEvent(accountId, 'contact.deleted', { contact: contactPayload(c) });
       return { ok: true };
     });
 
@@ -562,22 +637,39 @@ export async function apiRoutes(app: FastifyInstance) {
       await query('DELETE FROM lists WHERE id = $1', [id]);
       return { ok: true };
     });
+    /** Adds existing contacts by id or email. Unknown emails are returned in not_found (create them with POST /v1/contacts). */
     r.post('/v1/lists/:id/members', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
-      await owned('lists', id, req.auth.account.id, 'הרשימה');
-      const b = z.object({ contact_ids: z.array(uuid).min(1).max(10_000) }).parse(req.body);
-      const rows = await query(
-        `INSERT INTO list_members (list_id, contact_id) SELECT $1, c.id FROM contacts c WHERE c.id = ANY($2) AND c.account_id = $3
-         ON CONFLICT DO NOTHING RETURNING contact_id`,
-        [id, b.contact_ids, req.auth.account.id],
+      const accountId = req.auth.account.id;
+      await owned('lists', id, accountId, 'הרשימה');
+      const b = z
+        .object({ contact_ids: z.array(uuid).max(10_000).default([]), emails: z.array(email).max(10_000).default([]) })
+        .refine((v) => v.contact_ids.length + v.emails.length > 0, 'צריך לשלוח contact_ids או emails')
+        .parse(req.body);
+      const found = await query<{ id: string; email: string }>(
+        `SELECT id, email FROM contacts WHERE account_id = $1 AND (id = ANY($2::uuid[]) OR email = ANY($3::text[]))`,
+        [accountId, b.contact_ids, b.emails],
       );
-      return { added: rows.length };
+      const rows = await query(
+        `INSERT INTO list_members (list_id, contact_id, status) SELECT $1, unnest($2::uuid[]), 'confirmed' ON CONFLICT DO NOTHING RETURNING contact_id`,
+        [id, found.map((c) => c.id)],
+      );
+      const addedIds = new Set(rows.map((r: any) => r.contact_id));
+      if (addedIds.size <= 100) {
+        for (const c of await query('SELECT * FROM contacts WHERE id = ANY($1)', [[...addedIds]]))
+          await emitEvent(accountId, 'contact.added_to_list', { contact: contactPayload(c), list_id: id });
+      }
+      const known = new Set(found.map((c) => c.email));
+      return { added: rows.length, not_found: b.emails.filter((e) => !known.has(e)) };
     });
     r.delete('/v1/lists/:id/members/:contactId', async (req) => {
-      const p = z.object({ id: uuid, contactId: uuid }).parse(req.params);
-      await owned('lists', p.id, req.auth.account.id, 'הרשימה');
-      await query('DELETE FROM list_members WHERE list_id = $1 AND contact_id = $2', [p.id, p.contactId]);
-      return { ok: true };
+      const p = z.object({ id: uuid, contactId: z.string().min(1).max(320) }).parse(req.params);
+      const accountId = req.auth.account.id;
+      await owned('lists', p.id, accountId, 'הרשימה');
+      const c = await findContact(p.contactId, accountId);
+      const removed = await query('DELETE FROM list_members WHERE list_id = $1 AND contact_id = $2 RETURNING contact_id', [p.id, c.id]);
+      if (removed.length) await emitEvent(accountId, 'contact.removed_from_list', { contact: contactPayload(c), list_id: p.id });
+      return { ok: true, removed: removed.length > 0 };
     });
 
     // ---------- Templates ----------

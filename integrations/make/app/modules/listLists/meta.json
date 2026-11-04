@@ -1,0 +1,6 @@
+{
+  "name": "listLists",
+  "label": "רשימות התפוצה",
+  "description": "מחזיר את כל הרשימות בחשבון.",
+  "type": "search"
+}

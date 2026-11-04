@@ -1,0 +1,17 @@
+[
+  {
+    "name": "body",
+    "type": "any",
+    "label": "תשובה"
+  },
+  {
+    "name": "headers",
+    "type": "collection",
+    "label": "כותרות"
+  },
+  {
+    "name": "statusCode",
+    "type": "number",
+    "label": "קוד"
+  }
+]

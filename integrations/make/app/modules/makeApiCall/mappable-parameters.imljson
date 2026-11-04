@@ -1,0 +1,77 @@
+[
+  {
+    "name": "url",
+    "type": "text",
+    "label": "נתיב",
+    "required": true,
+    "help": "למשל `/contacts`. כתובת הבסיס היא https://mail.retsef.co.il/v1"
+  },
+  {
+    "name": "method",
+    "type": "select",
+    "label": "שיטה",
+    "required": true,
+    "default": "GET",
+    "options": [
+      {
+        "label": "GET",
+        "value": "GET"
+      },
+      {
+        "label": "POST",
+        "value": "POST"
+      },
+      {
+        "label": "PATCH",
+        "value": "PATCH"
+      },
+      {
+        "label": "PUT",
+        "value": "PUT"
+      },
+      {
+        "label": "DELETE",
+        "value": "DELETE"
+      }
+    ]
+  },
+  {
+    "name": "headers",
+    "type": "array",
+    "label": "כותרות",
+    "spec": [
+      {
+        "name": "key",
+        "type": "text",
+        "label": "שם"
+      },
+      {
+        "name": "value",
+        "type": "text",
+        "label": "ערך"
+      }
+    ]
+  },
+  {
+    "name": "qs",
+    "type": "array",
+    "label": "פרמטרים בכתובת",
+    "spec": [
+      {
+        "name": "key",
+        "type": "text",
+        "label": "שם"
+      },
+      {
+        "name": "value",
+        "type": "text",
+        "label": "ערך"
+      }
+    ]
+  },
+  {
+    "name": "body",
+    "type": "any",
+    "label": "גוף הבקשה (JSON)"
+  }
+]

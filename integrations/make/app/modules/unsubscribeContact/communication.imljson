@@ -1,0 +1,10 @@
+{
+  "url": "/contacts/{{encodeURL(parameters.contact)}}",
+  "method": "PATCH",
+  "body": {
+    "status": "unsubscribed"
+  },
+  "response": {
+    "output": "{{body}}"
+  }
+}

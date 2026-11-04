@@ -1,0 +1,46 @@
+[
+  {
+    "name": "events",
+    "type": "select",
+    "label": "אירועים",
+    "required": true,
+    "multiple": true,
+    "default": [
+      "email.delivered"
+    ],
+    "options": [
+      {
+        "label": "נשלח",
+        "value": "email.sent"
+      },
+      {
+        "label": "נמסר",
+        "value": "email.delivered"
+      },
+      {
+        "label": "נפתח",
+        "value": "email.opened"
+      },
+      {
+        "label": "לחיצה על קישור",
+        "value": "email.clicked"
+      },
+      {
+        "label": "חזר (bounce)",
+        "value": "email.bounced"
+      },
+      {
+        "label": "סומן כספאם",
+        "value": "email.complained"
+      },
+      {
+        "label": "נכשל",
+        "value": "email.failed"
+      },
+      {
+        "label": "הסרה מהדיוור",
+        "value": "email.unsubscribed"
+      }
+    ]
+  }
+]

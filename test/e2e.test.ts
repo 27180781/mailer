@@ -16,7 +16,7 @@ process.env.LOG_LEVEL = 'warn';
 process.env.RESERVED_DOMAINS = 'retsef.test';
 
 const { buildServer } = await import('../src/main.js');
-const { migrate, pool, query } = await import('../src/db.js');
+const { migrate, one, pool, query } = await import('../src/db.js');
 const { sendBatch } = await import('../src/worker.js');
 const { startDueCampaigns } = await import('../src/services/campaigns.js');
 const { dnsLookup } = await import('../src/services/domains.js');
@@ -699,4 +699,68 @@ test('robustness: transient DNS, degraded domains, foreign recipients, campaign 
   const res = await app.inject({ method: 'POST', url: `/u/${signToken(mm.body.messages[0].id)}`, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
     payload: `--${boundary}\r\nContent-Disposition: form-data; name="List-Unsubscribe"\r\n\r\nOne-Click\r\n--${boundary}--\r\n` });
   assert.equal(res.statusCode, 200);
+});
+
+test('contacts by email, status and list changes, contact webhooks (Zapier / Make)', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  const me = await api('GET', '/v1/me', K);
+  const accountId = me.body.account.id;
+  const hook = await api('POST', '/v1/webhooks', K, { url: 'https://hooks.zapier.test/abc', events: ['contact.created', 'contact.updated', 'contact.unsubscribed', 'contact.added_to_list', 'contact.removed_from_list', 'contact.deleted'] });
+  assert.equal(hook.status, 201);
+  const events = async () => (await query(`SELECT event_type, payload FROM webhook_deliveries WHERE webhook_id = $1 ORDER BY id`, [hook.body.id])).map((r: any) => r.event_type);
+
+  const a = await api('POST', '/v1/lists', K, { name: 'זאפייר א', double_opt_in: false });
+  const b = await api('POST', '/v1/lists', K, { name: 'זאפייר ב', double_opt_in: false });
+  const c1 = await api('POST', '/v1/contacts', K, { email: 'Zap1@Client.test', name: 'זאפ', list_ids: [a.body.id], consent_source: 'טופס באתר' });
+  assert.equal(c1.status, 201);
+  assert.equal(c1.body.created, true);
+  assert.deepEqual(c1.body.lists.map((l: any) => l.id), [a.body.id]);
+  const again = await api('POST', '/v1/contacts', K, { email: 'zap1@client.test', attributes: { city: 'חיפה' } });
+  assert.equal(again.status, 200, 'existing contact is updated, not duplicated');
+  assert.equal(again.body.id, c1.body.id);
+
+  // By email in the path
+  const got = await api('GET', '/v1/contacts/zap1@client.test', K);
+  assert.equal(got.body.id, c1.body.id);
+  assert.equal(got.body.attributes.city, 'חיפה');
+  assert.equal((await api('GET', '/v1/contacts/nobody@client.test', K)).status, 404);
+
+  const moved = await api('PATCH', '/v1/contacts/zap1@client.test', K, { name: 'זאפ חדש', attributes: { plan: 'pro' }, add_list_ids: [b.body.id], remove_list_ids: [a.body.id] });
+  assert.equal(moved.status, 200);
+  assert.equal(moved.body.name, 'זאפ חדש');
+  assert.deepEqual(moved.body.attributes, { city: 'חיפה', plan: 'pro' }, 'attributes merge by default');
+  assert.deepEqual(moved.body.lists.map((l: any) => l.id), [b.body.id]);
+
+  // Unsubscribe and resubscribe (needs a consent source)
+  const unsub = await api('PATCH', `/v1/contacts/${c1.body.id}`, K, { status: 'unsubscribed' });
+  assert.equal(unsub.body.status, 'unsubscribed');
+  assert.ok(await one(`SELECT 1 FROM suppressions WHERE account_id = $1 AND email = 'zap1@client.test' AND reason = 'unsubscribe'`, [accountId]));
+  assert.equal((await api('PATCH', `/v1/contacts/${c1.body.id}`, K, { status: 'active' })).status, 400);
+  const back = await api('PATCH', `/v1/contacts/${c1.body.id}`, K, { status: 'active', consent_source: 'נרשם מחדש באתר' });
+  assert.equal(back.body.status, 'active');
+  assert.equal(back.body.lists[0].status, 'confirmed');
+  assert.ok(!(await one(`SELECT 1 FROM suppressions WHERE account_id = $1 AND email = 'zap1@client.test'`, [accountId])));
+
+  // List members by email
+  await api('POST', '/v1/contacts', K, { email: 'zap2@client.test' });
+  const add = await api('POST', `/v1/lists/${a.body.id}/members`, K, { emails: ['zap1@client.test', 'zap2@client.test', 'ghost@client.test'] });
+  assert.equal(add.body.added, 2);
+  assert.deepEqual(add.body.not_found, ['ghost@client.test']);
+  const rm = await api('DELETE', `/v1/lists/${a.body.id}/members/zap2@client.test`, K);
+  assert.equal(rm.body.removed, true);
+  assert.equal((await api('DELETE', '/v1/contacts/zap2@client.test', K)).status, 200);
+
+  // What Make sends for empty fields
+  const blankFields = await api('POST', '/v1/contacts', K, { email: 'zap3@client.test', name: '', consent_source: '', list_ids: [''], attributes: {} });
+  assert.equal(blankFields.status, 201);
+  assert.equal(blankFields.body.name, null);
+  assert.equal(blankFields.body.consent_source, null);
+  const exact = await api('GET', '/v1/contacts?email=ZAP3@client.test&search=', K);
+  assert.deepEqual(exact.body.items.map((x: any) => x.email), ['zap3@client.test']);
+  assert.equal((await api('GET', '/v1/contacts?email=none@client.test', K)).body.total, 0);
+
+  const ev = await events();
+  for (const t of ['contact.created', 'contact.updated', 'contact.unsubscribed', 'contact.added_to_list', 'contact.removed_from_list', 'contact.deleted']) assert.ok(ev.includes(t), `${t} emitted`);
+  await api('DELETE', `/v1/webhooks/${hook.body.id}`, K);
 });

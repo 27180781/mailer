@@ -1,0 +1,38 @@
+[
+  {
+    "name": "contact",
+    "type": "text",
+    "label": "מייל או מזהה של איש הקשר",
+    "required": true
+  },
+  {
+    "name": "new_email",
+    "type": "email",
+    "label": "מייל חדש",
+    "help": "רק אם הכתובת השתנתה."
+  },
+  {
+    "name": "name",
+    "type": "text",
+    "label": "שם"
+  },
+  {
+    "name": "attributes",
+    "type": "array",
+    "label": "שדות נוספים",
+    "help": "מתמזגים עם השדות הקיימים.",
+    "spec": [
+      {
+        "name": "key",
+        "type": "text",
+        "label": "שם השדה",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "text",
+        "label": "ערך"
+      }
+    ]
+  }
+]

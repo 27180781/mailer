@@ -1,0 +1,12 @@
+{
+  "url": "/lists",
+  "method": "POST",
+  "body": {
+    "name": "{{parameters.name}}",
+    "description": "{{ifempty(parameters.description; undefined)}}",
+    "double_opt_in": "{{parameters.double_opt_in}}"
+  },
+  "response": {
+    "output": "{{body}}"
+  }
+}

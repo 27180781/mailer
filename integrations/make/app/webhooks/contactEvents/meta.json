@@ -1,0 +1,6 @@
+{
+  "name": "contactEvents",
+  "label": "אירועי מנויים",
+  "type": "dedicated (attached)",
+  "connection": "connection"
+}

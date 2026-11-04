@@ -1,0 +1,35 @@
+[
+  {
+    "name": "event",
+    "type": "select",
+    "label": "מתי להפעיל",
+    "required": true,
+    "default": "contact.created",
+    "options": [
+      {
+        "label": "מנוי חדש",
+        "value": "contact.created"
+      },
+      {
+        "label": "מנוי נוסף לרשימה",
+        "value": "contact.added_to_list"
+      },
+      {
+        "label": "מנוי הסיר את עצמו",
+        "value": "contact.unsubscribed"
+      },
+      {
+        "label": "פרטי מנוי עודכנו",
+        "value": "contact.updated"
+      },
+      {
+        "label": "מנוי הוצא מרשימה",
+        "value": "contact.removed_from_list"
+      },
+      {
+        "label": "מנוי נמחק",
+        "value": "contact.deleted"
+      }
+    ]
+  }
+]

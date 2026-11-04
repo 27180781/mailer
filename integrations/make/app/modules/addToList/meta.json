@@ -1,0 +1,6 @@
+{
+  "name": "addToList",
+  "label": "צירוף מנוי לרשימה",
+  "description": "מצרף איש קשר קיים לרשימה.",
+  "type": "action"
+}

@@ -1,0 +1,69 @@
+[
+  {
+    "name": "id",
+    "type": "text",
+    "label": "מזהה"
+  },
+  {
+    "name": "email",
+    "type": "email",
+    "label": "מייל"
+  },
+  {
+    "name": "name",
+    "type": "text",
+    "label": "שם"
+  },
+  {
+    "name": "status",
+    "type": "text",
+    "label": "סטטוס"
+  },
+  {
+    "name": "attributes",
+    "type": "any",
+    "label": "שדות נוספים"
+  },
+  {
+    "name": "consent_source",
+    "type": "text",
+    "label": "מקור ההסכמה"
+  },
+  {
+    "name": "lists",
+    "type": "array",
+    "label": "רשימות",
+    "spec": [
+      {
+        "name": "id",
+        "type": "text",
+        "label": "מזהה"
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "label": "שם"
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "label": "סטטוס"
+      }
+    ]
+  },
+  {
+    "name": "created_at",
+    "type": "date",
+    "label": "נוצר"
+  },
+  {
+    "name": "updated_at",
+    "type": "date",
+    "label": "עודכן"
+  },
+  {
+    "name": "created",
+    "type": "boolean",
+    "label": "נוצר עכשיו"
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "contact",
+    "type": "text",
+    "label": "מייל או מזהה של איש הקשר",
+    "required": true
+  }
+]

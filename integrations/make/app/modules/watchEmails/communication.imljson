@@ -1,0 +1,15 @@
+{
+  "output": {
+    "event": "{{body.type}}",
+    "created_at": "{{body.created_at}}",
+    "message_id": "{{body.data.message_id}}",
+    "to": "{{body.data.to}}",
+    "recipient": "{{body.data.recipient}}",
+    "recipient_type": "{{body.data.recipient_type}}",
+    "campaign_id": "{{body.data.campaign_id}}",
+    "url": "{{body.data.url}}",
+    "bounce_type": "{{body.data.bounce_type}}",
+    "metadata": "{{body.data.metadata}}",
+    "data": "{{body.data}}"
+  }
+}

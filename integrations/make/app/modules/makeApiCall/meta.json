@@ -1,0 +1,6 @@
+{
+  "name": "makeApiCall",
+  "label": "קריאת API חופשית",
+  "description": "קריאה לכל נתיב ב-API של מערכת הדיוור, עם החיבור הקיים.",
+  "type": "universal"
+}

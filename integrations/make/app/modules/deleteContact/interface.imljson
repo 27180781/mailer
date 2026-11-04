@@ -1,0 +1,12 @@
+[
+  {
+    "name": "ok",
+    "type": "boolean",
+    "label": "נמחק"
+  },
+  {
+    "name": "contact",
+    "type": "text",
+    "label": "איש הקשר"
+  }
+]

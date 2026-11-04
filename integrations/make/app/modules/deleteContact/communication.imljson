@@ -1,0 +1,10 @@
+{
+  "url": "/contacts/{{encodeURL(parameters.contact)}}",
+  "method": "DELETE",
+  "response": {
+    "output": {
+      "ok": "{{body.ok}}",
+      "contact": "{{parameters.contact}}"
+    }
+  }
+}
