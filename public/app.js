@@ -743,7 +743,16 @@
       </div>
       <h3 style="font-size:15px;margin:18px 0 8px">רשומות המפתח הציבורי (TXT)</h3>
       <div class="table-wrap"><table><tr><th>שם</th><th>ערך</th></tr>${s.public_key_records.map((r) => `<tr><td class="ltr">${esc(r.name)} <button class="copy" data-copy="${esc(r.name)}">העתקה</button></td><td class="ltr">${esc(r.value)} <button class="copy" data-copy="${esc(r.value)}">העתקה</button></td></tr>`).join('')}</table></div>
-      <div class="row" style="margin-top:14px">${s.templates.map((t, i) => `<button data-tpl="${i}">${icon('download')}${esc(t.file)}</button>`).join('')}</div></div>`;
+      <div class="row" style="margin-top:12px"><button class="primary" id="dc-keyzone">${icon('download')}הורדת קובץ DNS של המפתח (לייבוא ל-Cloudflare)</button></div>
+      <h3 style="font-size:15px;margin:18px 0 8px">קובצי התבניות (להגשה ב-GitHub)</h3>
+      <div class="row">${s.templates.map((t, i) => `<button data-tpl="${i}">${icon('download')}${esc(t.file)}</button>`).join('')}</div></div>`;
+    $('#dc-keyzone').onclick = () => {
+      const lines = [';; Domain Connect signing key for retsef.co.il', ';; Import into the retsef.co.il zone in Cloudflare (DNS > Records > Import and Export > Import)']
+        .concat(s.public_key_records.map((r) => `${r.name}.\t3600\tIN\tTXT\t"${r.value}"`));
+      const url = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/plain' }));
+      Object.assign(document.createElement('a'), { href: url, download: 'dns-domain-connect-key.txt' }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
     box.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = () => {
       const t = s.templates[Number(b.dataset.tpl)];
       const url = URL.createObjectURL(new Blob([JSON.stringify(t.json, null, 2) + '\n'], { type: 'application/json' }));
