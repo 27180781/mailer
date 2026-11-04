@@ -516,7 +516,7 @@
     });
   }
 
-  function campaignForm(c, ls, tpls, preset) {
+  function campaignForm(c, ls, tpls, preset, doms = []) {
     const sel = new Set((c?.lists || []).map((l) => l.id));
     const html = c?.html || preset?.html || STARTER_HTML;
     return `<form id="cf" class="card">
@@ -524,15 +524,43 @@
       <label>שם פנימי<input name="name" value="${esc(c?.name || (preset ? preset.name : ''))}" required></label>
       <label>נושא <small>(אפשר {{name}}. המילה «פרסומת» מתווספת אוטומטית)</small><input name="subject" value="${esc(c?.subject || preset?.subject || '')}" required></label>
       <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
-      <label style="flex:1">כתובת השולח<input name="from_email" class="ltr" value="${esc(c?.from_email)}" placeholder="news@example.co.il" required></label></div>
+      <div style="flex:1">${senderField(c?.from_email || '', doms)}</div></div>
       <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
       <label>רשימות יעד</label><div class="row" style="margin-bottom:12px">${ls.map((l) => `<label style="font-weight:400"><input type="checkbox" name="list" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>${esc(l.name)} (${l.members})</label>`).join('') || '<span class="muted">אין רשימות</span>'}</div>
       ${htmlEditor(html)}
       <div class="row"><button class="primary">שמירה</button><button type="button" id="save-tpl">שמירה כתבנית</button><a href="#/campaigns">ביטול</a></div></form>`;
   }
+  /**
+   * Sender address: the local part is typed, the domain is picked from the account's verified domains,
+   * so a campaign can't be saved with an address the system would refuse to send from.
+   */
+  function senderField(current, doms) {
+    const [local, dom] = current.includes('@') ? current.split('@') : ['', ''];
+    const verified = doms.filter((d) => d.status === 'verified' && !d.sender_id).map((d) => d.name);
+    const options = [...verified];
+    if (dom && !options.includes(dom)) options.push(dom);
+    if (!options.length) {
+      return `<label>כתובת השולח</label><div class="banner" style="margin:6px 0 0">${icon('alert')}<span>עוד אין דומיין מאומת. <a href="#/domains">מוסיפים ומאמתים דומיין</a>, ואז אפשר לבחור כתובת שולח.</span></div><input type="hidden" name="from_email" value="">`;
+    }
+    return `<label>כתובת השולח</label>
+      <div style="display:flex;direction:ltr;align-items:stretch;margin-top:6px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);overflow:hidden">
+        <input name="from_local" value="${esc(local || 'news')}" required pattern="[A-Za-z0-9._%+-]+" title="אותיות באנגלית, ספרות, נקודה, מקף או קו תחתון" class="ltr"
+          style="border:0;margin:0;flex:1;min-width:80px;border-radius:0;background:transparent;box-shadow:none" placeholder="news">
+        <span style="display:grid;place-items:center;padding:0 8px;color:var(--muted);background:var(--surface-2);font-family:ui-monospace,Consolas,monospace">@</span>
+        ${options.length === 1
+          ? `<span class="ltr" style="display:grid;place-items:center;padding:0 12px;background:var(--surface-2)">${esc(options[0])}</span><input type="hidden" name="from_domain" value="${esc(options[0])}">`
+          : `<select name="from_domain" class="ltr" style="border:0;margin:0;width:auto;border-radius:0;background:var(--surface-2);box-shadow:none">${options.map((o) => `<option value="${esc(o)}" ${o === (dom || verified[0]) ? 'selected' : ''}>${esc(o)}${verified.includes(o) ? '' : ' (לא מאומת)'}</option>`).join('')}</select>`}
+      </div>
+      <small class="muted">אפשר לשלוח מכל כתובת בדומיין מאומת.</small>`;
+  }
   function readCampaignForm(f) {
     const b = formData(f);
     delete b.list;
+    if (b.from_local !== undefined) {
+      b.from_email = `${String(b.from_local).trim()}@${b.from_domain}`;
+      delete b.from_local;
+      delete b.from_domain;
+    }
     b.list_ids = [...f.querySelectorAll('input[name=list]:checked')].map((x) => x.value);
     if (!b.reply_to) b.reply_to = null;
     return b;
@@ -541,10 +569,10 @@
     const ls = await api('GET', '/v1/lists');
     if (id === 'new' || sub === 'edit') {
       const c = id === 'new' ? null : await api('GET', `/v1/campaigns/${id}`);
-      const tpls = await api('GET', '/v1/templates');
+      const [tpls, doms] = await Promise.all([api('GET', '/v1/templates'), api('GET', '/v1/domains')]);
       const presetId = new URLSearchParams(location.hash.split('?')[1] || '').get('template');
       const preset = !c && presetId ? tpls.find((t) => t.id === presetId) : null;
-      $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls, tpls, preset)}`;
+      $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls, tpls, preset, doms)}`;
       bindPreviews();
       const form = $('#cf');
       const pick = $('#tpl-pick');
