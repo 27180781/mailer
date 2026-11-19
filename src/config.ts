@@ -42,6 +42,11 @@ export const config = {
   // Operator's own Cloudflare token (Zone · DNS · Edit). Used only for super admin accounts and
   // accounts allowed to use reserved domains, never for regular customers.
   cloudflareToken: process.env.CLOUDFLARE_API_TOKEN || '',
+  // How many businesses (accounts) one user may own. Super admins are not limited; per user override in users.max_owned_accounts
+  maxAccountsPerUser: Number(env('MAX_ACCOUNTS_PER_USER', '5')),
+  // System emails (team invitations). Must be on a verified domain of an account in this system, e.g. no-reply@mail.retsef.co.il
+  systemFromEmail: (process.env.SYSTEM_FROM_EMAIL || '').trim().toLowerCase(),
+  systemFromName: process.env.SYSTEM_FROM_NAME || 'מערכת הדיוור',
   // Comma separated emails that become super admins on signup
   superAdmins: (process.env.SUPER_ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 };

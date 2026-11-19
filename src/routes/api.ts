@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { one, query, tx } from '../db.js';
-import { hashPassword, verifyPassword, sha256 } from '../crypto.js';
+import { hashPassword, verifyPassword, sha256, randomToken } from '../crypto.js';
 import { ApiError, notFound } from '../errors.js';
-import { authenticate, createApiKey, createSession, requirePlatform, requireSuperAdmin } from '../auth.js';
+import { authenticate, authorize, createApiKey, createSession, memberships, requirePlatform, requireSuperAdmin, type Role } from '../auth.js';
+import { sendSystemEmail } from '../services/systemEmail.js';
+import { escapeHtml } from '../services/render.js';
 import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '../services/domains.js';
 import { bimiRecordValue, bimiStatus, validateBimiSvg, validateCertificate } from '../services/bimi.js';
 import { enqueueEmail, resolveFrom, sentToday } from '../services/send.js';
@@ -91,7 +93,7 @@ async function owned(table: string, id: string, accountId: string, what: string)
 async function canUseOperatorCloudflare(req: any) {
   if (!config.cloudflareToken) return false;
   if (req.auth.user?.is_superadmin || req.auth.account.can_use_reserved_domains) return true;
-  const admin = await one('SELECT 1 FROM users WHERE account_id = $1 AND is_superadmin', [req.auth.account.id]);
+  const admin = await one('SELECT 1 FROM account_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = $1 AND u.is_superadmin', [req.auth.account.id]);
   return !!admin;
 }
 
@@ -125,10 +127,11 @@ export async function apiRoutes(app: FastifyInstance) {
           superadmin,
         ])
       ).rows[0];
+      await c.query(`INSERT INTO account_members (account_id, user_id, role) VALUES ($1, $2, 'owner')`, [account.id, user.id]);
       return { account, user };
     });
     reply.code(201);
-    return { token: await createSession(result.user.id), account: publicAccount(result.account) };
+    return { token: await createSession(result.user.id, result.account.id), account: publicAccount(result.account) };
   });
 
   app.post('/v1/auth/login', async (req) => {
@@ -138,9 +141,76 @@ export async function apiRoutes(app: FastifyInstance) {
     return { token: await createSession(user.id) };
   });
 
+  // ---------- Team invitations (the link in the email; works signed in or not) ----------
+  const ROLE_LABEL: Record<string, string> = { owner: 'בעלים', admin: 'מנהל', editor: 'עורך', viewer: 'צופה' };
+  async function openInvitation(token: string) {
+    const inv = await one(
+      `SELECT i.*, a.name AS account_name, a.status AS account_status, u.name AS invited_by_name
+       FROM account_invitations i JOIN accounts a ON a.id = i.account_id LEFT JOIN users u ON u.id = i.invited_by
+       WHERE i.token_hash = $1`,
+      [sha256(token)],
+    );
+    if (!inv || inv.account_status === 'suspended') throw new ApiError(404, 'invitation_not_found', 'ההזמנה לא נמצאה');
+    if (inv.accepted_at) throw new ApiError(410, 'invitation_used', 'כבר השתמשו בהזמנה הזו');
+    if (new Date(inv.expires_at) < new Date()) throw new ApiError(410, 'invitation_expired', 'פג תוקף ההזמנה. בקשו הזמנה חדשה');
+    return inv;
+  }
+  app.get('/v1/invitations/:token', async (req) => {
+    const inv = await openInvitation(String((req.params as any).token));
+    return {
+      account_name: inv.account_name,
+      email: inv.email,
+      role: inv.role,
+      role_label: ROLE_LABEL[inv.role],
+      invited_by: inv.invited_by_name,
+      expires_at: inv.expires_at,
+      user_exists: !!(await one('SELECT 1 FROM users WHERE email = $1', [inv.email])),
+    };
+  });
+  /**
+   * Accepts an invitation. Signed in (Bearer ms_…): joins that user. Not signed in: creates the user for the invited
+   * email (name + password) and signs them in. An existing user who is not signed in must sign in first.
+   */
+  app.post('/v1/invitations/:token/accept', async (req) => {
+    const inv = await openInvitation(String((req.params as any).token));
+    let userId: string;
+    let token: string | null = null;
+    if (req.headers.authorization?.startsWith('Bearer ms_')) {
+      await authenticate(req, undefined as any);
+      userId = req.auth.user.id;
+    } else {
+      const b = z
+        .object({ name: z.string().min(1, 'צריך שם').max(120), password: z.string().min(10, 'הסיסמה צריכה להיות באורך 10 תווים לפחות') })
+        .parse(req.body ?? {});
+      if (await one('SELECT 1 FROM users WHERE email = $1', [inv.email])) throw new ApiError(409, 'login_required', 'כבר יש משתמש עם המייל הזה. מתחברים ואז מקבלים את ההזמנה');
+      const u = await one(
+        `INSERT INTO users (account_id, email, name, password_hash, is_superadmin) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [inv.account_id, inv.email, b.name, await hashPassword(b.password), config.superAdmins.includes(inv.email)],
+      );
+      userId = u.id;
+    }
+    await tx(async (c) => {
+      const claimed = await c.query(`UPDATE account_invitations SET accepted_at = now(), accepted_by = $2 WHERE id = $1 AND accepted_at IS NULL RETURNING id`, [inv.id, userId]);
+      if (!claimed.rowCount) throw new ApiError(410, 'invitation_used', 'כבר השתמשו בהזמנה הזו');
+      // Joining never lowers an existing role
+      await c.query(
+        `INSERT INTO account_members (account_id, user_id, role) VALUES ($1, $2, $3)
+         ON CONFLICT (account_id, user_id) DO UPDATE SET role = CASE
+           WHEN array_position(ARRAY['viewer','editor','admin','owner'], account_members.role) >= array_position(ARRAY['viewer','editor','admin','owner'], EXCLUDED.role)
+           THEN account_members.role ELSE EXCLUDED.role END`,
+        [inv.account_id, userId, inv.role],
+      );
+      await c.query('UPDATE users SET account_id = $2 WHERE id = $1', [userId, inv.account_id]);
+    });
+    if (req.auth?.user) await query('UPDATE sessions SET account_id = $2 WHERE token_hash = $1', [sha256(req.headers.authorization!.slice(7).trim()), inv.account_id]);
+    else token = await createSession(userId, inv.account_id);
+    return { ok: true, account_id: inv.account_id, account_name: inv.account_name, role: inv.role, ...(token ? { token } : {}) };
+  });
+
   // ---------- Everything below needs a token ----------
   app.register(async (r) => {
     r.addHook('preHandler', authenticate);
+    r.addHook('preHandler', authorize);
 
     r.post('/v1/auth/logout', async (req) => {
       const token = req.headers.authorization!.slice(7).trim();
@@ -148,14 +218,150 @@ export async function apiRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
-    r.get('/v1/me', async (req) => ({
-      account: publicAccount(req.auth.account),
-      user: req.auth.user && { id: req.auth.user.id, email: req.auth.user.email, name: req.auth.user.name, is_superadmin: req.auth.user.is_superadmin },
-      usage: { today: await sentToday(req.auth.account.id), daily_limit: req.auth.account.daily_limit },
-      trust: await trustInfo(req.auth.account),
-      cloudflare_operator: await canUseOperatorCloudflare(req),
-      test_mode: req.auth.testMode,
-    }));
+    r.get('/v1/me', async (req) => {
+      const a = req.auth.account;
+      const user = req.auth.user && { id: req.auth.user.id, email: req.auth.user.email, name: req.auth.user.name, is_superadmin: req.auth.user.is_superadmin };
+      const accounts = req.auth.user ? await memberships(req.auth.user.id) : undefined;
+      if (!a) return { account: null, user, role: null, accounts, can_create_account: await canCreateAccount(req.auth.user) };
+      return {
+        account: publicAccount(a),
+        user,
+        role: req.auth.role,
+        accounts,
+        can_create_account: req.auth.user ? await canCreateAccount(req.auth.user) : undefined,
+        usage: { today: await sentToday(a.id), daily_limit: a.daily_limit },
+        trust: await trustInfo(a),
+        cloudflare_operator: await canUseOperatorCloudflare(req),
+        test_mode: req.auth.testMode,
+      };
+    });
+
+    // ---------- Businesses (accounts) of the signed-in user ----------
+    async function canCreateAccount(user: any) {
+      if (user.is_superadmin) return true;
+      const owned = await one<{ n: number }>(`SELECT count(*)::int AS n FROM account_members WHERE user_id = $1 AND role = 'owner'`, [user.id]);
+      return owned!.n < (user.max_owned_accounts ?? config.maxAccountsPerUser);
+    }
+    r.get('/v1/accounts', async (req) => memberships(req.auth.user.id));
+    /** Opens another business. It starts like any new account: pending, with the new-account daily limit. */
+    r.post('/v1/accounts', async (req, reply) => {
+      const user = req.auth.user;
+      const b = z.object({ name: z.string().trim().min(1, 'צריך שם לעסק').max(120), company_address: z.string().max(300).optional() }).parse(req.body);
+      if (!(await canCreateAccount(user)))
+        throw new ApiError(403, 'account_limit', `אפשר לפתוח עד ${user.max_owned_accounts ?? config.maxAccountsPerUser} עסקים. לעסקים נוספים פונים למנהל המערכת`);
+      const account = await tx(async (c) => {
+        const a = (
+          await c.query(
+            `INSERT INTO accounts (name, company_name, company_address, contact_email, daily_limit, status) VALUES ($1, $1, $2, $3, $4, $5) RETURNING *`,
+            [b.name, b.company_address ?? null, user.email, config.newAccountDailyLimit, user.is_superadmin ? 'active' : 'pending'],
+          )
+        ).rows[0];
+        await c.query(`INSERT INTO account_members (account_id, user_id, role) VALUES ($1, $2, 'owner')`, [a.id, user.id]);
+        return a;
+      });
+      await switchTo(req, account.id);
+      reply.code(201);
+      return publicAccount(account);
+    });
+    async function switchTo(req: any, accountId: string) {
+      const token = req.headers.authorization!.slice(7).trim();
+      await query('UPDATE sessions SET account_id = $2 WHERE token_hash = $1', [sha256(token), accountId]);
+      await query('UPDATE users SET account_id = $2 WHERE id = $1', [req.auth.user.id, accountId]);
+    }
+    r.post('/v1/accounts/switch', async (req) => {
+      const { account_id } = z.object({ account_id: uuid }).parse(req.body);
+      const m = await one('SELECT role FROM account_members WHERE account_id = $1 AND user_id = $2', [account_id, req.auth.user.id]);
+      if (!m) throw notFound('החשבון');
+      await switchTo(req, account_id);
+      return { ok: true, account_id, role: m.role };
+    });
+
+    // ---------- Team ----------
+    const RANK: Record<Role, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
+    r.get('/v1/members', async (req) => {
+      const accountId = req.auth.account.id;
+      const members = await query(
+        `SELECT u.id AS user_id, u.email, u.name, m.role, m.created_at FROM account_members m JOIN users u ON u.id = m.user_id
+         WHERE m.account_id = $1 ORDER BY array_position(ARRAY['owner','admin','editor','viewer'], m.role), u.name`,
+        [accountId],
+      );
+      const invitations = await query(
+        `SELECT i.id, i.email, i.role, i.expires_at, i.created_at, u.name AS invited_by FROM account_invitations i LEFT JOIN users u ON u.id = i.invited_by
+         WHERE i.account_id = $1 AND i.accepted_at IS NULL AND i.expires_at > now() ORDER BY i.created_at DESC`,
+        [accountId],
+      );
+      return { members, invitations, my_role: req.auth.role };
+    });
+    r.post('/v1/members/invitations', async (req, reply) => {
+      const accountId = req.auth.account.id;
+      const b = z.object({ email, role: z.enum(['admin', 'editor', 'viewer']).default('editor') }).parse(req.body);
+      const existing = await one(`SELECT 1 FROM account_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = $1 AND u.email = $2`, [accountId, b.email]);
+      if (existing) throw new ApiError(409, 'already_member', 'המשתמש הזה כבר בצוות');
+      const token = `inv_${randomToken(24)}`;
+      // A new invitation to the same email replaces the previous one
+      await query(`DELETE FROM account_invitations WHERE account_id = $1 AND email = $2 AND accepted_at IS NULL`, [accountId, b.email]);
+      const inv = await one(
+        `INSERT INTO account_invitations (account_id, email, role, token_hash, invited_by, expires_at) VALUES ($1, $2, $3, $4, $5, now() + interval '7 days')
+         RETURNING id, email, role, expires_at, created_at`,
+        [accountId, b.email, b.role, sha256(token), req.auth.user.id],
+      );
+      const link = `${config.publicUrl}/app/#/invite/${token}`;
+      const who = escapeHtml(req.auth.user.name || req.auth.user.email);
+      const biz = escapeHtml(req.auth.account.name);
+      const emailed = await sendSystemEmail(
+        b.email,
+        `${req.auth.user.name || req.auth.user.email} הזמין/ה אותך לצוות של ${req.auth.account.name}`,
+        `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6">
+          <p>שלום,</p>
+          <p>${who} הזמין/ה אותך להצטרף לחשבון הדיוור של <b>${biz}</b>, בהרשאת ${ROLE_LABEL[b.role]}.</p>
+          <p><a href="${link}" style="display:inline-block;background:#1c1917;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none">הצטרפות לצוות</a></p>
+          <p style="color:#78716c;font-size:13px">ההזמנה בתוקף לשבעה ימים. אם לא ציפית להזמנה הזו, אפשר להתעלם מהמייל.</p></div>`,
+      ).catch((err) => {
+        req.log.error(err, 'invitation email failed');
+        return false;
+      });
+      reply.code(201);
+      return { ...inv, link, emailed };
+    });
+    r.delete('/v1/members/invitations/:id', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      await query('DELETE FROM account_invitations WHERE id = $1 AND account_id = $2 AND accepted_at IS NULL', [id, req.auth.account.id]);
+      return { ok: true };
+    });
+    async function memberOrThrow(accountId: string, userId: string) {
+      const m = await one<{ role: Role }>('SELECT role FROM account_members WHERE account_id = $1 AND user_id = $2', [accountId, userId]);
+      if (!m) throw notFound('חבר הצוות');
+      return m;
+    }
+    async function ownerCount(accountId: string) {
+      return (await one<{ n: number }>(`SELECT count(*)::int AS n FROM account_members WHERE account_id = $1 AND role = 'owner'`, [accountId]))!.n;
+    }
+    /** Admins manage editors and viewers; only owners touch owners or make someone an owner. */
+    function canManage(actor: Role | null, isSuper: boolean, target: Role, next?: Role) {
+      if (isSuper || actor === 'owner') return true;
+      return actor === 'admin' && RANK[target] < RANK.owner && (!next || RANK[next] < RANK.owner);
+    }
+    r.patch('/v1/members/:userId', async (req) => {
+      const { userId } = z.object({ userId: uuid }).parse(req.params);
+      const { role } = z.object({ role: z.enum(['owner', 'admin', 'editor', 'viewer']) }).parse(req.body);
+      const accountId = req.auth.account.id;
+      const m = await memberOrThrow(accountId, userId);
+      if (!canManage(req.auth.role, req.auth.user.is_superadmin, m.role, role)) throw new ApiError(403, 'forbidden', 'רק בעלים יכולים לשנות הרשאות של בעלים או למנות בעלים');
+      if (m.role === 'owner' && role !== 'owner' && (await ownerCount(accountId)) <= 1) throw new ApiError(409, 'last_owner', 'בחשבון חייב להישאר לפחות בעלים אחד');
+      await query('UPDATE account_members SET role = $3 WHERE account_id = $1 AND user_id = $2', [accountId, userId, role]);
+      return { ok: true, user_id: userId, role };
+    });
+    r.delete('/v1/members/:userId', async (req) => {
+      const { userId } = z.object({ userId: uuid }).parse(req.params);
+      const accountId = req.auth.account.id;
+      const m = await memberOrThrow(accountId, userId);
+      const self = userId === req.auth.user.id;
+      if (!self && !canManage(req.auth.role, req.auth.user.is_superadmin, m.role)) throw new ApiError(403, 'forbidden', 'רק בעלים יכולים להסיר בעלים');
+      if (m.role === 'owner' && (await ownerCount(accountId)) <= 1) throw new ApiError(409, 'last_owner', 'בחשבון חייב להישאר לפחות בעלים אחד. ממנים בעלים נוסף ואז אפשר לעזוב');
+      await query('DELETE FROM account_members WHERE account_id = $1 AND user_id = $2', [accountId, userId]);
+      // Their sessions in this account move to another account (or none) on the next request
+      return { ok: true };
+    });
 
     /** Daily counts for the dashboard chart, plus totals for the period (Israel time). */
     r.get('/v1/stats', async (req) => {

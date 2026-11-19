@@ -764,3 +764,113 @@ test('contacts by email, status and list changes, contact webhooks (Zapier / Mak
   for (const t of ['contact.created', 'contact.updated', 'contact.unsubscribed', 'contact.added_to_list', 'contact.removed_from_list', 'contact.deleted']) assert.ok(ev.includes(t), `${t} emitted`);
   await api('DELETE', `/v1/webhooks/${hook.body.id}`, K);
 });
+
+test('several businesses per user, switching, team invitations and roles', async () => {
+  const owner = await api('POST', '/v1/auth/signup', undefined, { email: 'multi@biz.test', password: 'very-secret-11', name: 'בעלת עסקים', account_name: 'עסק ראשון' });
+  const T = owner.body.token;
+  const first = owner.body.account.id;
+  let me = await api('GET', '/v1/me', T);
+  assert.equal(me.body.role, 'owner');
+  assert.deepEqual(me.body.accounts.map((a: any) => a.name), ['עסק ראשון']);
+
+  // A second business: becomes the active one, starts pending with the new-account limit
+  const second = await api('POST', '/v1/accounts', T, { name: 'עסק שני' });
+  assert.equal(second.status, 201);
+  assert.equal(second.body.status, 'pending');
+  me = await api('GET', '/v1/me', T);
+  assert.equal(me.body.account.id, second.body.id);
+  assert.equal(me.body.accounts.length, 2);
+  // Data is separate per business
+  await api('POST', '/v1/contacts', T, { email: 'only-in-second@client.test' });
+  await api('POST', '/v1/accounts/switch', T, { account_id: first });
+  assert.equal((await api('GET', '/v1/contacts?email=only-in-second@client.test', T)).body.total, 0);
+  assert.equal((await api('POST', '/v1/accounts/switch', T, { account_id: '00000000-0000-4000-8000-000000000000' })).status, 404);
+  // A new login lands in the last used business
+  const relog = await api('POST', '/v1/auth/login', undefined, { email: 'multi@biz.test', password: 'very-secret-11' });
+  assert.equal((await api('GET', '/v1/me', relog.body.token)).body.account.id, first);
+
+  // Limit on owned businesses
+  await query(`UPDATE users SET max_owned_accounts = 2 WHERE email = 'multi@biz.test'`);
+  const third = await api('POST', '/v1/accounts', T, { name: 'עסק שלישי' });
+  assert.equal(third.status, 403);
+  assert.equal(third.body.error.code, 'account_limit');
+
+  // Invite an editor (no SYSTEM_FROM_EMAIL in tests: the link comes back instead)
+  const inv = await api('POST', '/v1/members/invitations', T, { email: 'Editor@Team.test', role: 'editor' });
+  assert.equal(inv.status, 201);
+  assert.equal(inv.body.emailed, false);
+  const token = inv.body.link.split('#/invite/')[1];
+  const info = await api('GET', `/v1/invitations/${token}`);
+  assert.equal(info.body.account_name, 'עסק ראשון');
+  assert.equal(info.body.email, 'editor@team.test');
+  assert.equal(info.body.user_exists, false);
+  assert.equal((await api('POST', `/v1/invitations/${token}/accept`, undefined, { name: 'עורכת', password: 'short' })).status, 400);
+  const joined = await api('POST', `/v1/invitations/${token}/accept`, undefined, { name: 'עורכת', password: 'very-secret-12' });
+  assert.equal(joined.status, 200);
+  const E = joined.body.token;
+  assert.equal((await api('POST', `/v1/invitations/${token}/accept`, undefined, { name: 'שוב', password: 'very-secret-12' })).status, 410, 'one use');
+  me = await api('GET', '/v1/me', E);
+  assert.equal(me.body.account.id, first);
+  assert.equal(me.body.role, 'editor');
+
+  // Editor: content yes, sending setup / keys / team no
+  assert.equal((await api('POST', '/v1/contacts', E, { email: 'by-editor@client.test' })).status, 201);
+  assert.equal((await api('POST', '/v1/lists', E, { name: 'של העורכת', double_opt_in: false })).status, 201);
+  assert.equal((await api('POST', '/v1/domains', E, { name: 'editor-domain.test' })).status, 403);
+  assert.equal((await api('POST', '/v1/api-keys', E, { name: 'x' })).status, 403);
+  assert.equal((await api('POST', '/v1/members/invitations', E, { email: 'x@team.test' })).status, 403);
+  assert.equal((await api('PATCH', '/v1/account', E, { name: 'שינוי' })).status, 403);
+  assert.equal((await api('GET', '/v1/members', E)).status, 200, 'can see the team');
+
+  const members = await api('GET', '/v1/members', T);
+  const editorId = members.body.members.find((m: any) => m.email === 'editor@team.test').user_id;
+  const ownerId = members.body.members.find((m: any) => m.email === 'multi@biz.test').user_id;
+
+  // Viewer: read only
+  await api('PATCH', `/v1/members/${editorId}`, T, { role: 'viewer' });
+  assert.equal((await api('GET', '/v1/contacts', E)).status, 200);
+  const blocked = await api('POST', '/v1/contacts', E, { email: 'by-viewer@client.test' });
+  assert.equal(blocked.status, 403);
+  assert.match(blocked.body.error.message, /צופה/);
+
+  // Admin: manages the team but not owners
+  await api('PATCH', `/v1/members/${editorId}`, T, { role: 'admin' });
+  assert.equal((await api('POST', '/v1/api-keys', E, { name: 'מנהל' })).status, 201);
+  assert.equal((await api('PATCH', `/v1/members/${editorId}`, E, { role: 'owner' })).status, 403, 'admin cannot make owners');
+  assert.equal((await api('DELETE', `/v1/members/${ownerId}`, E)).status, 403, 'admin cannot remove an owner');
+  // The last owner cannot leave or be demoted
+  assert.equal((await api('PATCH', `/v1/members/${ownerId}`, T, { role: 'admin' })).body.error.code, 'last_owner');
+  assert.equal((await api('DELETE', `/v1/members/${ownerId}`, T)).body.error.code, 'last_owner');
+
+  // API keys act for the account, not for a person
+  const key = (await api('POST', '/v1/api-keys', T, { name: 'צוות' })).body.key;
+  assert.equal((await api('GET', '/v1/members', key)).status, 403);
+  assert.equal((await api('POST', '/v1/accounts', key, { name: 'x' })).status, 403);
+
+  // Removed from their only account: signed in, but must open a business or get invited
+  assert.equal((await api('DELETE', `/v1/members/${editorId}`, T)).status, 200);
+  me = await api('GET', '/v1/me', E);
+  assert.equal(me.body.account, null);
+  assert.equal(me.body.accounts.length, 0);
+  assert.equal((await api('GET', '/v1/contacts', E)).body.error.code, 'no_account');
+  const own = await api('POST', '/v1/accounts', E, { name: 'העסק של העורכת' });
+  assert.equal(own.status, 201);
+  assert.equal((await api('GET', '/v1/me', E)).body.role, 'owner');
+
+  // An existing user accepts while signed in; the invitation does not lower a higher role
+  const inv2 = await api('POST', '/v1/members/invitations', T, { email: 'editor@team.test', role: 'viewer' });
+  const t2 = inv2.body.link.split('#/invite/')[1];
+  assert.equal((await api('GET', `/v1/invitations/${t2}`)).body.user_exists, true);
+  assert.equal((await api('POST', `/v1/invitations/${t2}/accept`, undefined, { name: 'x', password: 'very-secret-13' })).body.error.code, 'login_required');
+  const acc = await api('POST', `/v1/invitations/${t2}/accept`, E);
+  assert.equal(acc.status, 200);
+  me = await api('GET', '/v1/me', E);
+  assert.equal(me.body.account.id, first, 'accepting switches to the account');
+  assert.equal(me.body.role, 'viewer');
+  assert.equal(me.body.accounts.length, 2);
+
+  // Revoked invitations stop working
+  const inv3 = await api('POST', '/v1/members/invitations', T, { email: 'late@team.test' });
+  await api('DELETE', `/v1/members/invitations/${inv3.body.id}`, T);
+  assert.equal((await api('GET', `/v1/invitations/${inv3.body.link.split('#/invite/')[1]}`)).status, 404);
+});

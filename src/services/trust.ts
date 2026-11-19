@@ -73,7 +73,7 @@ export async function runAutoTrust() {
   if (process.env.AUTO_TRUST === 'false') return;
   const accounts = await query(
     `SELECT a.* FROM accounts a WHERE a.status IN ('pending', 'active')
-       AND NOT EXISTS (SELECT 1 FROM users u WHERE u.account_id = a.id AND u.is_superadmin)`,
+       AND NOT EXISTS (SELECT 1 FROM account_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = a.id AND u.is_superadmin)`,
   );
   for (const a of accounts) {
     const health = await sendingHealth(a.id);

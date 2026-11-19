@@ -185,6 +185,49 @@ paths:
       summary: הסרת הלוגו
       parameters: [{ $ref: '#/components/parameters/id' }]
       responses: { '200': { description: OK } }
+  /v1/accounts:
+    get: { tags: [עסקים וצוות], summary: העסקים של המשתמש המחובר, description: משתמש מחובר בלבד (לא מפתח API), responses: { '200': { description: 'OK: [{ id, name, status, type, role }]' } } }
+    post:
+      tags: [עסקים וצוות]
+      summary: פתיחת עסק נוסף
+      description: העסק החדש הופך לפעיל בהתחברות הנוכחית. מוגבל ל-MAX_ACCOUNTS_PER_USER עסקים בבעלות.
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, company_address: { type: string } } } } } }
+      responses: { '201': { description: נוצר }, '403': { $ref: '#/components/responses/Error' } }
+  /v1/accounts/switch:
+    post:
+      tags: [עסקים וצוות]
+      summary: מעבר לעסק אחר
+      requestBody: { content: { application/json: { schema: { type: object, required: [account_id], properties: { account_id: { type: string, format: uuid } } } } } }
+      responses: { '200': { description: OK } }
+  /v1/members:
+    get: { tags: [עסקים וצוות], summary: הצוות וההזמנות הפתוחות, responses: { '200': { description: 'OK: { members, invitations, my_role }' } } }
+  /v1/members/invitations:
+    post:
+      tags: [עסקים וצוות]
+      summary: הזמנת איש צוות (בעלים או מנהל)
+      requestBody: { content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string }, role: { type: string, enum: [admin, editor, viewer], default: editor } } } } } }
+      responses: { '201': { description: 'נוצר: { id, email, role, expires_at, link, emailed }' } }
+  /v1/members/invitations/{id}:
+    delete: { tags: [עסקים וצוות], summary: ביטול הזמנה, parameters: [{ $ref: '#/components/parameters/id' }], responses: { '200': { description: OK } } }
+  /v1/members/{userId}:
+    parameters: [{ in: path, name: userId, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [עסקים וצוות]
+      summary: שינוי הרשאה
+      requestBody: { content: { application/json: { schema: { type: object, required: [role], properties: { role: { type: string, enum: [owner, admin, editor, viewer] } } } } } }
+      responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } }
+    delete: { tags: [עסקים וצוות], summary: הסרה מהצוות, או עזיבה (המשתמש עצמו), responses: { '200': { description: OK } } }
+  /v1/invitations/{token}:
+    get: { tags: [עסקים וצוות], summary: פרטי הזמנה (בלי מפתח), security: [], parameters: [{ in: path, name: token, required: true, schema: { type: string } }], responses: { '200': { description: OK }, '410': { $ref: '#/components/responses/Error' } } }
+  /v1/invitations/{token}/accept:
+    post:
+      tags: [עסקים וצוות]
+      summary: קבלת הזמנה
+      description: עם התחברות (Bearer ms_…) מצרף את המשתמש. בלי התחברות יוצר משתמש למייל המוזמן ומחזיר token.
+      security: []
+      parameters: [{ in: path, name: token, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, password: { type: string, minLength: 10 } } } } } }
+      responses: { '200': { description: 'OK: { account_id, account_name, role, token? }' } }
   /v1/contacts:
     get:
       tags: [אנשי קשר ורשימות]

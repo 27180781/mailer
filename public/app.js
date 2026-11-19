@@ -48,6 +48,8 @@
     book: '<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5z"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    chevrons: '<path d="m7 15 5 5 5-5M7 9l5-5 5 5"/>',
+    team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M19 8v6M16 11h6"/>',
   };
   const icon = (name, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
   document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon, el.classList.contains('brand-mark') ? 20 : 18); el.style.color = el.classList.contains('brand-mark') ? '#fff' : ''; });
@@ -104,10 +106,13 @@
     $('#auth-error').textContent = '';
     try {
       const r = await api('POST', path, formData(e.target));
-      token = r.token;
-      try { localStorage.setItem('token', token); } catch {}
+      setToken(r.token);
       await boot();
     } catch (err) { $('#auth-error').textContent = err.message; }
+  }
+  function setToken(t) {
+    token = t;
+    try { localStorage.setItem('token', token); } catch {}
   }
   $('#login-form').addEventListener('submit', (e) => authSubmit(e, '/v1/auth/login'));
   $('#signup-form').addEventListener('submit', (e) => authSubmit(e, '/v1/auth/signup'));
@@ -130,10 +135,12 @@
     emails: ['מיילים שנשלחו', emails, null, 'inbox', 'קהל'],
     domains: ['דומיינים', domains, null, 'globe', 'שליחה'],
     senders: ['שולחים', senders, () => me.account.type === 'platform', 'building', 'שליחה'],
-    keys: ['מפתחות API', keys, null, 'key', 'פיתוח'],
-    webhooks: ['Webhooks', webhooks, null, 'zap', 'פיתוח'],
+    keys: ['מפתחות API', keys, () => canAdmin(), 'key', 'פיתוח'],
+    webhooks: ['Webhooks', webhooks, () => canAdmin(), 'zap', 'פיתוח'],
     docs: ['תיעוד API', null, null, 'book', 'פיתוח'],
     settings: ['הגדרות חשבון', settings, null, 'settings', 'חשבון'],
+    team: ['צוות', team, () => !!me.user, 'team', 'חשבון'],
+    invite: ['הזמנה לצוות', invite, () => false, 'team', 'חשבון'],
     admin: ['ניהול חשבונות', admin, () => me.user?.is_superadmin, 'shield', 'חשבון'],
   };
   function renderNav(current) {
@@ -173,20 +180,190 @@
     senders: ['building', 'עוד אין שולחים', 'כל שולח הוא לקוח שלך עם דומיין משלו.'],
   };
 
+  const ROLES = { owner: 'בעלים', admin: 'מנהל', editor: 'עורך', viewer: 'צופה' };
+  const ROLE_HELP = {
+    admin: 'כל מה שהבעלים יכולים, חוץ מניהול בעלים',
+    editor: 'אנשי קשר, רשימות, תבניות ודיוורים. בלי דומיינים, מפתחות API, הגדרות וצוות',
+    viewer: 'צפייה בלבד',
+  };
+  /** API keys and super admins act with full access; people by their role */
+  const canAdmin = () => !me.role || me.role === 'owner' || me.role === 'admin' || me.user?.is_superadmin;
+
   async function boot() {
-    if (!token) { $('#auth').classList.remove('hidden'); return; }
+    const inviteToken = (location.hash.match(/^#\/invite\/([\w-]+)/) || [])[1];
+    if (!token) {
+      $('#auth').classList.remove('hidden');
+      if (inviteToken) inviteLoggedOut(inviteToken);
+      return;
+    }
     me = await api('GET', '/v1/me');
     $('#auth').classList.add('hidden');
     $('#shell').classList.remove('hidden');
+    $('#who').textContent = me.user?.email || '';
+    $('#who-name').textContent = me.user?.name || '';
+    $('#avatar').textContent = (me.user?.name || '?').trim().charAt(0);
+    if (!me.account) return inviteToken ? route() : noAccount();
     $('#brand').textContent = me.account.name;
-    $('#brand-sub').textContent = me.account.type === 'platform' ? 'חשבון פלטפורמה' : 'חשבון דיוור';
+    $('#brand-sub').textContent = [me.account.type === 'platform' ? 'חשבון פלטפורמה' : 'חשבון דיוור', me.role && me.role !== 'owner' ? ROLES[me.role] : '']
+      .filter(Boolean).join(' · ');
     $('#who').textContent = me.user?.email || '';
     $('#who-name').textContent = me.user?.name || me.account.name;
     $('#avatar').textContent = (me.user?.name || me.account.name || '?').trim().charAt(0);
     $('#banner').innerHTML = me.account.status === 'pending'
       ? `<div class="banner">${icon('alert')}<span>החשבון ממתין לאישור. עד האישור אפשר לשלוח עד ${me.account.daily_limit} מיילים ביום, ודיוורים לרשימות לא זמינים.</span></div>`
       : me.account.status === 'suspended' ? `<div class="banner">${icon('alert')}<span>החשבון מושעה. לבירור פנו לתמיכה.</span></div>` : '';
+    if (me.role === 'viewer') $('#banner').innerHTML += `<div class="banner" style="background:var(--info-soft);color:var(--info)">${icon('eye')}<span>יש לך הרשאת צפייה בחשבון הזה: אפשר לראות הכל, בלי לשנות.</span></div>`;
     route();
+  }
+
+  // ---------- Businesses ----------
+  $('#switcher').addEventListener('click', () => { if (me?.user) switcher(); });
+  function switcher() {
+    const accounts = me.accounts || [];
+    modal(`<h2 style="margin-top:0">העסקים שלך</h2>
+      <div class="acct-list">${accounts.map((a) => `<button type="button" class="acct-item ${a.id === me.account?.id ? 'current' : ''}" data-switch="${a.id}">
+        <div class="brand-mark" style="width:32px;height:32px">${icon('building', 16)}</div>
+        <div class="grow"><b>${esc(a.name)}</b><span class="role-hint">${ROLES[a.role]}${a.status === 'pending' ? ' · ממתין לאישור' : a.status === 'suspended' ? ' · מושעה' : ''}</span></div>
+        ${a.id === me.account?.id ? icon('check') : ''}</button>`).join('')}</div>
+      ${me.can_create_account
+        ? `<form id="new-acct" class="row" style="align-items:flex-end"><label style="flex:1;margin:0">פתיחת עסק נוסף<input name="name" placeholder="שם העסק" required></label><button class="primary">${icon('plus')}פתיחה</button></form>
+           <p class="muted" style="font-size:13px">לכל עסק דומיינים, רשימות, מכסות ומפתחות API משלו. עסק חדש מתחיל במכסה של חשבון חדש, וגדל לבד עם הזמן.</p>`
+        : '<p class="muted">הגעת למספר העסקים המרבי. לעסקים נוספים פונים למנהל המערכת.</p>'}
+      <div class="row" style="justify-content:flex-end"><button type="button" data-close>סגירה</button></div>`);
+    document.querySelectorAll('[data-switch]').forEach((b) => (b.onclick = () => switchAccount(b.dataset.switch)));
+    const f = $('#new-acct');
+    if (f) f.onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('POST', '/v1/accounts', formData(e.target)); closeModal(); location.hash = '#/dashboard'; await boot(); toast('העסק נפתח'); } catch (err) { toast(err.message, 'error'); }
+    };
+  }
+  async function switchAccount(id) {
+    if (id === me.account?.id) return closeModal();
+    try { await api('POST', '/v1/accounts/switch', { account_id: id }); closeModal(); location.hash = '#/dashboard'; await boot(); } catch (err) { toast(err.message, 'error'); }
+  }
+  /** Signed in, but in no account (removed from the only one): open a business, or wait for an invitation */
+  function noAccount() {
+    $('#brand').textContent = 'מערכת דיוור';
+    $('#brand-sub').textContent = '';
+    $('#banner').innerHTML = '';
+    $('#nav').innerHTML = '';
+    $('#view').innerHTML = `<div class="card" style="max-width:520px;margin:40px auto">
+      <h1 style="margin-top:0">אין לך עדיין חשבון פעיל</h1>
+      <p class="muted">אפשר לפתוח עסק חדש, או לבקש ממי שמנהל חשבון קיים לשלוח לך הזמנה לצוות.</p>
+      <form id="first-acct"><label>שם העסק<input name="name" required></label><button class="primary">פתיחת עסק</button></form></div>`;
+    $('#first-acct').onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('POST', '/v1/accounts', formData(e.target)); location.hash = '#/dashboard'; await boot(); } catch (err) { toast(err.message, 'error'); }
+    };
+  }
+
+  // ---------- Team invitations ----------
+  const inviteText = (i) => `<p><b>${esc(i.invited_by || 'צוות החשבון')}</b> הזמין/ה אותך להצטרף לחשבון הדיוור של <b>${esc(i.account_name)}</b>, בהרשאת <b>${esc(i.role_label)}</b>.</p>`;
+  /** The invitation link opened while signed out: create a user, or sign in first */
+  async function inviteLoggedOut(t) {
+    const box = $('#invite-box');
+    const hideForms = (hide) => { ['#login-form', '#signup-form', '.auth-card .tabs'].forEach((sel) => $(sel)?.classList.toggle('hidden', hide)); };
+    let i;
+    try { i = await api('GET', `/v1/invitations/${t}`); } catch (err) {
+      box.classList.remove('hidden');
+      box.innerHTML = `<div class="banner">${icon('alert')}<span>${esc(err.message)}</span></div>`;
+      return;
+    }
+    $('#auth-title').textContent = 'הזמנה לצוות';
+    $('#auth-sub').textContent = i.email;
+    box.classList.remove('hidden');
+    if (i.user_exists) {
+      box.innerHTML = `${inviteText(i)}<p class="muted">כבר יש משתמש עם הכתובת הזו. מתחברים, וההזמנה תחכה במסך הבא.</p>`;
+      hideForms(false);
+      $('[data-auth-tab="login"]').click();
+      $('#auth-title').textContent = 'הזמנה לצוות';
+      $('#login-form').email.value = i.email;
+      return;
+    }
+    hideForms(true);
+    box.innerHTML = `${inviteText(i)}<form id="accept-new"><label>שם מלא<input name="name" required></label>
+      <label>סיסמה <small>(10 תווים לפחות)</small><input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
+      <button class="primary">הצטרפות</button></form>`;
+    $('#accept-new').onsubmit = async (e) => {
+      e.preventDefault();
+      $('#auth-error').textContent = '';
+      try {
+        const r = await api('POST', `/v1/invitations/${t}/accept`, formData(e.target));
+        setToken(r.token);
+        box.classList.add('hidden');
+        hideForms(false);
+        location.hash = '#/dashboard';
+        await boot();
+        toast(`הצטרפת ל-${r.account_name}`);
+      } catch (err) { $('#auth-error').textContent = err.message; }
+    };
+  }
+  /** The invitation link opened while signed in */
+  async function invite(t) {
+    const i = await api('GET', `/v1/invitations/${t}`);
+    $('#view').innerHTML = `<div class="card" style="max-width:560px;margin:24px auto"><h1 style="margin-top:0">הזמנה לצוות</h1>${inviteText(i)}
+      <p class="muted">${me.user.email === i.email ? '' : `ההזמנה נשלחה ל-<span class="ltr">${esc(i.email)}</span>, ואתה מחובר כ-<span class="ltr">${esc(me.user.email)}</span>. אפשר לקבל אותה גם כך.`}</p>
+      <div class="row"><button class="primary" id="accept">הצטרפות</button><a href="#/dashboard">לא עכשיו</a></div></div>`;
+    $('#accept').onclick = async () => {
+      try { const r = await api('POST', `/v1/invitations/${t}/accept`); location.hash = '#/dashboard'; await boot(); toast(`הצטרפת ל-${r.account_name}`); } catch (err) { toast(err.message, 'error'); }
+    };
+  }
+
+  async function team() {
+    const t = await api('GET', '/v1/members');
+    const mine = me.user?.is_superadmin ? 'owner' : t.my_role;
+    const manage = mine === 'owner' || mine === 'admin';
+    const roleOptions = (current, target) => Object.entries(ROLES)
+      .filter(([k]) => mine === 'owner' || (k !== 'owner' && target !== 'owner'))
+      .map(([k, l]) => `<option value="${k}" ${k === current ? 'selected' : ''}>${l}</option>`).join('');
+    $('#view').innerHTML = `<div class="page-head"><div><h1>צוות</h1><p>מי עובד בחשבון של ${esc(me.account.name)}, ובאיזו הרשאה.</p></div></div>
+      ${manage ? `<form id="inv" class="card row" style="align-items:flex-end">
+        <label style="flex:2;margin:0;min-width:200px">מייל<input name="email" type="email" class="ltr" required placeholder="name@example.com"></label>
+        <label style="flex:1;margin:0;min-width:140px">הרשאה<select name="role">${['editor', 'viewer', 'admin'].map((k) => `<option value="${k}">${ROLES[k]}</option>`).join('')}</select></label>
+        <button class="primary">${icon('plus')}שליחת הזמנה</button></form>
+        <p class="role-hint" id="role-help" style="margin:-8px 4px 16px">${ROLE_HELP.editor}</p><div id="inv-result"></div>` : ''}
+      <div class="table-wrap"><table><tr><th>שם</th><th>מייל</th><th>הרשאה</th><th>מאז</th><th></th></tr>
+      ${t.members.map((m) => {
+        const self = m.user_id === me.user.id;
+        const canEdit = manage && !self && (mine === 'owner' || m.role !== 'owner');
+        return `<tr><td>${esc(m.name || '')}${self ? ' <span class="badge">את/ה</span>' : ''}</td><td class="ltr">${esc(m.email)}</td>
+          <td>${canEdit ? `<select data-role="${m.user_id}" style="margin:0;width:auto">${roleOptions(m.role, m.role)}</select>` : `<span class="badge ${m.role === 'owner' ? 'info' : ''}">${ROLES[m.role]}</span>`}</td>
+          <td>${fmtDate(m.created_at)}</td>
+          <td>${canEdit ? `<button class="danger" data-remove="${m.user_id}">הסרה</button>` : self && !(m.role === 'owner' && t.members.filter((x) => x.role === 'owner').length < 2) ? `<button data-remove="${m.user_id}" data-self>עזיבת החשבון</button>` : ''}</td></tr>`;
+      }).join('')}</table></div>
+      ${t.invitations.length ? `<h2>הזמנות שממתינות</h2><div class="table-wrap"><table><tr><th>מייל</th><th>הרשאה</th><th>הוזמן ע״י</th><th>בתוקף עד</th><th></th></tr>
+        ${t.invitations.map((i) => `<tr><td class="ltr">${esc(i.email)}</td><td>${ROLES[i.role]}</td><td>${esc(i.invited_by || '')}</td><td>${fmtDate(i.expires_at)}</td>
+          <td>${manage ? `<button data-resend="${esc(i.email)}" data-resend-role="${i.role}">שליחה מחדש</button> <button class="danger" data-revoke-inv="${i.id}">ביטול</button>` : ''}</td></tr>`).join('')}</table></div>` : ''}
+      <div class="card" style="margin-top:20px;background:var(--surface-2)"><b>מה כל הרשאה מאפשרת</b>
+        <p class="muted" style="margin:6px 0 0"><b>בעלים:</b> הכל, כולל ניהול הצוות ומינוי בעלים. <b>מנהל:</b> ${ROLE_HELP.admin}. <b>עורך:</b> ${ROLE_HELP.editor}. <b>צופה:</b> ${ROLE_HELP.viewer}.</p></div>`;
+    const sendInvite = async (email, role) => {
+      const r = await api('POST', '/v1/members/invitations', { email, role });
+      $('#inv-result').innerHTML = r.emailed
+        ? `<div class="banner" style="background:var(--good-soft);color:var(--good)">${icon('check')}<span>ההזמנה נשלחה ל-<span class="ltr">${esc(r.email)}</span>.</span></div>`
+        : `<div class="keybox" style="margin-bottom:16px"><b>ההזמנה נוצרה. שלחו את הקישור ל-<span class="ltr">${esc(r.email)}</span>:</b><div class="ltr" style="margin:8px 0;word-break:break-all">${esc(r.link)}</div><button class="copy" data-copy="${esc(r.link)}">העתקה</button>
+           <p class="muted" style="margin:8px 0 0;font-size:13px">כדי שההזמנות יישלחו במייל אוטומטית, מגדירים SYSTEM_FROM_EMAIL בשרת.</p></div>`;
+      return r;
+    };
+    const f = $('#inv');
+    if (f) {
+      f.role.onchange = () => { $('#role-help').textContent = ROLE_HELP[f.role.value]; };
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try { const d = formData(e.target); await sendInvite(d.email, d.role); const keep = $('#inv-result').innerHTML; await team(); $('#inv-result').innerHTML = keep; } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+    document.querySelectorAll('[data-role]').forEach((sel) => (sel.onchange = async () => {
+      try { await api('PATCH', `/v1/members/${sel.dataset.role}`, { role: sel.value }); toast('ההרשאה עודכנה'); } catch (err) { toast(err.message, 'error'); team(); }
+    }));
+    document.querySelectorAll('[data-remove]').forEach((b) => (b.onclick = async () => {
+      const self = b.dataset.self !== undefined;
+      if (!confirm(self ? `לעזוב את החשבון של ${me.account.name}? כדי לחזור צריך הזמנה חדשה.` : 'להסיר את חבר הצוות מהחשבון?')) return;
+      try { await api('DELETE', `/v1/members/${b.dataset.remove}`); if (self) { location.hash = '#/dashboard'; await boot(); } else team(); } catch (err) { toast(err.message, 'error'); }
+    }));
+    document.querySelectorAll('[data-revoke-inv]').forEach((b) => (b.onclick = async () => { await api('DELETE', `/v1/members/invitations/${b.dataset.revokeInv}`); team(); }));
+    document.querySelectorAll('[data-resend]').forEach((b) => (b.onclick = async () => {
+      try { const r = await sendInvite(b.dataset.resend, b.dataset.resendRole); if (r.emailed) toast('ההזמנה נשלחה שוב'); } catch (err) { toast(err.message, 'error'); }
+    }));
   }
 
   // ---------- Views ----------

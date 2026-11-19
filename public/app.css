@@ -244,3 +244,15 @@ iframe { box-shadow: var(--shadow); }
 .page-head h1 small { font-size: 15px; font-weight: 500; color: var(--muted); }
 .page-head > .row { gap: 8px; }
 .auth-hero small { color: rgba(255, 255, 255, .8); }
+
+/* Business switcher */
+.brand-switch { width: 100%; background: transparent; border: 0; box-shadow: none; text-align: right; border-radius: var(--r); padding: 6px 8px; margin-bottom: 16px; cursor: pointer; font: inherit; }
+.brand-switch:hover { background: var(--side-hover); }
+.brand-chevron { color: var(--side-ink); opacity: .7; flex: none; }
+.acct-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 18px; }
+.acct-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); text-align: right; cursor: pointer; font: inherit; color: var(--ink); box-shadow: none; }
+.acct-item:hover { border-color: var(--accent, #6d5efc); }
+.acct-item.current { background: var(--surface-2); cursor: default; }
+.acct-item .grow { flex: 1; min-width: 0; }
+.acct-item .grow b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-hint { font-size: 13px; color: var(--muted); }

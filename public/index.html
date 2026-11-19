@@ -50,16 +50,18 @@
           <button class="primary" type="submit">פתיחת חשבון</button>
         </form>
         <p class="error" id="auth-error"></p>
+        <div id="invite-box" class="hidden"></div>
       </div>
     </section>
   </div>
 
   <div id="shell" class="shell hidden">
     <aside class="nav">
-      <div class="brand">
+      <button class="brand brand-switch" id="switcher" type="button" title="מעבר בין עסקים">
         <div class="brand-mark" data-icon="mail"></div>
-        <div style="min-width:0"><div class="brand-name" id="brand">מערכת דיוור</div><div class="brand-sub" id="brand-sub"></div></div>
-      </div>
+        <div style="min-width:0;flex:1"><div class="brand-name" id="brand">מערכת דיוור</div><div class="brand-sub" id="brand-sub"></div></div>
+        <span class="brand-chevron" data-icon="chevrons"></span>
+      </button>
       <nav id="nav"></nav>
       <div class="nav-foot">
         <div class="avatar" id="avatar"></div>
