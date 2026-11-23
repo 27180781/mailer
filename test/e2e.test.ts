@@ -894,7 +894,7 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     const fn = url.replace(`${inforu.INFORU_BASE}/`, '');
     calls.push({ fn, auth: init.headers.Authorization, data: JSON.parse(init.body).Data });
     if (mode === 'badauth') return new Response(JSON.stringify({ StatusId: -2, StatusDescription: 'Authentication failed' }));
-    if (fn === 'Contact/GetGroupList') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ GroupId: 1 }] } }));
+    if (fn === 'Contact/GetGroupList') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ GroupId: 11, GroupNumber: 3, GroupName: 'לקוחות ותיקים', CountNonBlockedContactsInfoMail: 1200 }, { GroupId: 12, GroupNumber: 4, GroupName: 'מתעניינים', CountActiveContactsMail: 300 }] } }));
     return new Response(JSON.stringify({ StatusId: 1, RequestId: `req-${calls.length}`, Data: {} }));
   }) as any;
   try {
@@ -986,8 +986,32 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     const q2 = await query(`SELECT DISTINCT status FROM messages WHERE campaign_id = $1`, [camp2.body.id]);
     assert.deepEqual(q2.map((r: any) => r.status), ['queued']);
 
-    // Disconnect
+    // Groups that live in InforU
     mode = 'ok';
+    const groups = await api('GET', '/v1/account/inforu/groups', K);
+    assert.deepEqual(groups.body.map((g: any) => [g.id, g.name, g.recipients]), [[11, 'לקוחות ותיקים', 1200], [12, 'מתעניינים', 300]]);
+    assert.equal((await api('POST', '/v1/campaigns', K, { name: 'x', subject: 'x', from_name: 'x', from_email: 'news@inforu-only.test', channel: 'inforu', inforu_group_ids: [99] })).body.error.code, 'inforu_group_not_found');
+    const gc = await api('POST', '/v1/campaigns', K, { name: 'לקבוצות', subject: 'שלום {{name}}', from_name: 'רצף', from_email: 'news@inforu-only.test', html: '<p>שלום {{name}}</p>', channel: 'inforu', inforu_group_ids: [11] });
+    assert.deepEqual(gc.body.inforu_groups, [{ id: 11, name: 'לקוחות ותיקים', recipients: 1200 }]);
+    assert.equal((await api('POST', `/v1/campaigns/${gc.body.id}/send`, K, {})).status, 200, 'groups alone are enough, no list needed');
+    await startDueCampaigns();
+    const { superviseCampaigns } = await import('../src/services/campaigns.js');
+    await superviseCampaigns();
+    assert.equal((await api('GET', `/v1/campaigns/${gc.body.id}`, K)).body.status, 'sending', 'not closed before the group call');
+    calls.length = 0;
+    await processInforuCampaigns();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].data.IncludeGroupIds, [11]);
+    assert.equal(calls[0].data.IncludeContacts, undefined);
+    assert.equal(calls[0].data.Subject, 'פרסומת: שלום ', 'no personal fields for a whole group');
+    await processInforuCampaigns();
+    assert.equal(calls.length, 1, 'the group call happens once');
+    await superviseCampaigns();
+    const gdone = await api('GET', `/v1/campaigns/${gc.body.id}`, K);
+    assert.equal(gdone.body.status, 'sent');
+    assert.ok(gdone.body.inforu_groups_sent_at);
+
+    // Disconnect
     await api('DELETE', '/v1/account/inforu', K);
     assert.equal((await api('GET', '/v1/account/inforu', K)).body.connected, false);
   } finally {

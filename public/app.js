@@ -766,6 +766,7 @@
       <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
       <div style="flex:1" id="sender-box">${c?.channel === 'inforu' ? inforuSenderField(c.from_email) : senderField(c?.from_email || '', doms)}</div></div>
       <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
+      <div id="iu-groups-box" class="${c?.channel === 'inforu' ? '' : 'hidden'}" data-selected="${esc(JSON.stringify((c?.inforu_groups || []).map((g) => g.id)))}"></div>
       <label>רשימות יעד</label><div class="row" style="margin-bottom:12px">${ls.map((l) => `<label style="font-weight:400"><input type="checkbox" name="list" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>${esc(l.name)} (${l.members})</label>`).join('') || '<span class="muted">אין רשימות</span>'}</div>
       ${htmlEditor(html)}
       <div class="row"><button class="primary">שמירה</button><button type="button" id="save-tpl">שמירה כתבנית</button><a href="#/campaigns">ביטול</a></div></form>`;
@@ -810,8 +811,26 @@
       const cur = box.querySelector('[name=from_email]')?.value || (box.querySelector('[name=from_local]') ? `${box.querySelector('[name=from_local]').value}@${box.querySelector('[name=from_domain]')?.value || ''}` : '');
       box.innerHTML = sel.value === 'inforu' ? inforuSenderField(cur.endsWith('@') ? '' : cur) : senderField(cur, doms);
     };
-    sel.onchange = () => sync(false);
+    sel.onchange = () => { sync(false); loadIuGroups(); };
     sync(true);
+    loadIuGroups();
+  }
+  /** InforU contact groups, chosen as targets of an InforU campaign (they stay in InforU) */
+  let iuGroupsCache = null;
+  async function loadIuGroups() {
+    const box = $('#iu-groups-box');
+    if (!box) return;
+    const on = $('#channel')?.value === 'inforu';
+    box.classList.toggle('hidden', !on);
+    if (!on) return;
+    const selected = new Set(JSON.parse(box.dataset.selected || '[]'));
+    if (!iuGroupsCache) {
+      box.innerHTML = '<label>קבוצות ב-InforU</label><p class="role-hint">טוען קבוצות מ-InforU…</p>';
+      try { iuGroupsCache = await api('GET', '/v1/account/inforu/groups'); } catch (err) { box.innerHTML = `<label>קבוצות ב-InforU</label><p class="error">${esc(err.message)}</p>`; return; }
+    }
+    box.innerHTML = `<label>קבוצות ב-InforU <small>(נשלח ישירות לקבוצות שם, בלי להעתיק אותן לכאן)</small></label>
+      <div class="row" style="margin-bottom:6px">${iuGroupsCache.map((g) => `<label style="font-weight:400"><input type="checkbox" name="iu_group" value="${g.id}" ${selected.has(g.id) ? 'checked' : ''}>${esc(g.name)} (${g.recipients.toLocaleString('he-IL')})</label>`).join('') || '<span class="muted">אין קבוצות בחשבון ה-InforU</span>'}</div>
+      <p class="role-hint" style="margin:0 0 14px">אפשר לבחור קבוצות ב-InforU, רשימות מכאן, או את שתיהן. בשליחה לקבוצה שדות אישיים כמו {{name}} יוצאים ריקים, ומי שנמצא גם בקבוצה וגם ברשימה כאן עלול לקבל את הדיוור פעמיים.</p>`;
   }
   function readCampaignForm(f) {
     const b = formData(f);
@@ -823,6 +842,8 @@
       delete b.from_domain;
     }
     b.list_ids = [...f.querySelectorAll('input[name=list]:checked')].map((x) => x.value);
+    delete b.iu_group;
+    if (b.channel === 'inforu' && f.querySelector('#iu-groups-box input')) b.inforu_group_ids = [...f.querySelectorAll('input[name=iu_group]:checked')].map((x) => Number(x.value));
     if (!b.reply_to) b.reply_to = null;
     return b;
   }
@@ -914,7 +935,8 @@
         ${c.status === 'paused' ? '<button class="primary" id="resume">המשך שליחה</button>' : ''}
         ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
         ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
-        <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}</p>
+        <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}
+          ${(c.inforu_groups || []).length ? ` · <b>קבוצות InforU:</b> ${c.inforu_groups.map((g) => `${esc(g.name)} (${Number(g.recipients).toLocaleString('he-IL')})`).join(', ')}${c.inforu_groups_sent_at ? ` <span class="badge good">נשלח ${fmtDate(c.inforu_groups_sent_at)}</span>` : ''}` : ''}</p>
         ${s.total ? `<div class="grid">
           ${statCard('all', s.sent.toLocaleString('he-IL'), `נשלחו${s.queued ? ` · ${s.queued} בתור` : ''}`)}
           ${c.channel === 'inforu' ? statCard('sent', s.pending.toLocaleString('he-IL'), 'הועברו ל-InforU לשליחה')

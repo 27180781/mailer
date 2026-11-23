@@ -57,6 +57,35 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
       await pause(campaign, 'החיבור ל-InforU הוסר או לא תקין. מחברים מחדש בהגדרות החשבון וממשיכים את הדיוור');
       continue;
     }
+    // Groups that live in InforU: one call, sent once. The body can't be personal (InforU fills it for everyone).
+    const groups = (campaign.inforu_groups ?? []) as { id: number; name: string; recipients: number }[];
+    if (groups.length && !campaign.inforu_groups_sent_at) {
+      const claimedGroups = await one(`UPDATE campaigns SET inforu_groups_sent_at = now() WHERE id = $1 AND inforu_groups_sent_at IS NULL RETURNING id`, [campaign.id]);
+      if (claimedGroups) {
+        const r = render(campaign, account, null, '');
+        try {
+          const { requestId } = await inforuSend(creds, {
+            campaignName: campaign.name,
+            campaignRefId: `${campaign.id}:groups`,
+            fromAddress: campaign.from_email,
+            fromName: campaign.from_name,
+            replyAddress: campaign.reply_to,
+            subject: r.subject,
+            html: r.html,
+            contacts: [],
+            groupIds: groups.map((g) => g.id),
+            allowDuplicates: false,
+          });
+          await query('UPDATE campaigns SET inforu_groups_request_id = $2 WHERE id = $1', [campaign.id, requestId || null]);
+          handed += groups.reduce((n, g) => n + (g.recipients || 0), 0);
+        } catch (err: any) {
+          await query('UPDATE campaigns SET inforu_groups_sent_at = NULL WHERE id = $1', [campaign.id]);
+          const message = String(err?.message ?? err).slice(0, 500);
+          await pause(campaign, `השליחה לקבוצות InforU נעצרה: ${message}`);
+          continue;
+        }
+      }
+    }
     // Claim a slice of this campaign's queue (other workers skip these rows)
     const claimed = await query(
       `UPDATE messages SET status = 'sending', attempts = attempts + 1, next_attempt_at = now()
@@ -70,7 +99,7 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
     const contacts = new Map<string, any>(
       (await query('SELECT * FROM contacts WHERE id = ANY($1)', [claimed.map((m: any) => m.contact_id).filter(Boolean)])).map((c: any) => [c.id, c]),
     );
-    const groups = new Map<string, { subject: string; html: string; messages: any[] }>();
+    const bodies = new Map<string, { subject: string; html: string; messages: any[] }>();
     for (const m of claimed) {
       const why = await suppressionReason(account.id, m.to_email, 'campaign');
       if (why) {
@@ -79,13 +108,13 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
       }
       const r = render(campaign, account, contacts.get(m.contact_id), m.to_email);
       const key = `${r.subject}\u0000${r.html}`;
-      if (!groups.has(key)) groups.set(key, { ...r, messages: [] });
-      groups.get(key)!.messages.push(m);
+      if (!bodies.has(key)) bodies.set(key, { ...r, messages: [] });
+      bodies.get(key)!.messages.push(m);
     }
 
     let part = 0;
     let stopped = false;
-    for (const g of groups.values()) {
+    for (const g of bodies.values()) {
       if (stopped) break;
       for (let i = 0; i < g.messages.length; i += INFORU_BATCH) {
         const batch = g.messages.slice(i, i + INFORU_BATCH);

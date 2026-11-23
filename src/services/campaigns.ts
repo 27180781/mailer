@@ -92,6 +92,8 @@ export async function superviseCampaigns() {
         continue;
       }
     }
+    // InforU groups go out in their own call; don't close the campaign before it happened
+    if (c.channel === 'inforu' && (c.inforu_groups ?? []).length && !c.inforu_groups_sent_at) continue;
     if (s.queued === 0) {
       await query(`UPDATE campaigns SET status = 'sent', finished_at = now(), updated_at = now() WHERE id = $1`, [c.id]);
       await emitEvent(c.account_id, 'campaign.finished', { campaign_id: c.id, stats: s });

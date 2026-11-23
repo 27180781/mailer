@@ -7,7 +7,8 @@ import { ApiError, notFound } from '../errors.js';
 import { authenticate, authorize, createApiKey, createSession, memberships, requirePlatform, requireSuperAdmin, type Role } from '../auth.js';
 import { sendSystemEmail } from '../services/systemEmail.js';
 import { inforuTestSend } from '../services/inforuCampaigns.js';
-import { inforuVerify } from '../providers/inforu.js';
+import { inforuGroups, inforuVerify } from '../providers/inforu.js';
+import { inforuCredentials } from '../services/inforuCampaigns.js';
 import { encryptSecret } from '../crypto.js';
 import { escapeHtml } from '../services/render.js';
 import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '../services/domains.js';
@@ -421,6 +422,11 @@ export async function apiRoutes(app: FastifyInstance) {
       }
       await query('UPDATE accounts SET inforu_username = $2, inforu_token_enc = $3 WHERE id = $1', [req.auth.account.id, b.username, encryptSecret(b.token)]);
       return { connected: true, username: b.username };
+    });
+    r.get('/v1/account/inforu/groups', async (req) => {
+      const creds = inforuCredentials(req.auth.account);
+      if (!creds) throw new ApiError(400, 'inforu_not_connected', 'InforU לא מחובר לחשבון');
+      try { return await inforuGroups(creds); } catch (err: any) { throw new ApiError(502, 'inforu_error', String(err?.message ?? err)); }
     });
     r.delete('/v1/account/inforu', async (req) => {
       await query('UPDATE accounts SET inforu_username = NULL, inforu_token_enc = NULL WHERE id = $1', [req.auth.account.id]);
@@ -961,7 +967,23 @@ export async function apiRoutes(app: FastifyInstance) {
       list_ids: z.array(uuid).default([]),
       /** 'inforu' sends through the account's InforUMobile packages (Settings → InforU) */
       channel: z.enum(['ses', 'inforu']).optional(),
+      /** InforU contact groups (GroupId) to send to, for channel inforu */
+      inforu_group_ids: z.array(z.coerce.number().int()).max(50).optional(),
     });
+    /** Turns group ids into {id, name, recipients} from InforU, so the campaign shows what was chosen */
+    async function resolveInforuGroups(account: any, ids?: number[]) {
+      if (ids === undefined) return undefined;
+      if (!ids.length) return [];
+      const creds = inforuCredentials(account);
+      if (!creds) throw new ApiError(400, 'inforu_not_connected', 'כדי לשלוח לקבוצות InforU מחברים קודם את חשבון ה-InforU בהגדרות החשבון');
+      let all;
+      try { all = await inforuGroups(creds); } catch (err: any) { throw new ApiError(502, 'inforu_error', String(err?.message ?? err)); }
+      return ids.map((id) => {
+        const g = all.find((x) => x.id === id);
+        if (!g) throw new ApiError(400, 'inforu_group_not_found', `קבוצה ${id} לא נמצאה ב-InforU`);
+        return { id: g.id, name: g.name, recipients: g.recipients };
+      });
+    }
     function checkChannel(account: any, channel?: string) {
       if (channel === 'inforu' && !(account.inforu_username && account.inforu_token_enc))
         throw new ApiError(400, 'inforu_not_connected', 'כדי לשלוח דרך InforU מחברים קודם את חשבון ה-InforU בהגדרות החשבון');
@@ -985,6 +1007,7 @@ export async function apiRoutes(app: FastifyInstance) {
     r.post('/v1/campaigns', async (req, reply) => {
       const b = campaignBody.parse(req.body);
       checkChannel(req.auth.account, b.channel);
+      const iuGroups = b.channel === 'inforu' ? await resolveInforuGroups(req.auth.account, b.inforu_group_ids) : undefined;
       let { html, text, subject } = b;
       if (b.template_id) {
         const t = await owned('templates', b.template_id, req.auth.account.id, 'התבנית');
@@ -993,9 +1016,9 @@ export async function apiRoutes(app: FastifyInstance) {
         subject = subject || t.subject;
       }
       const c = await one(
-        `INSERT INTO campaigns (account_id, sender_id, name, subject, from_name, from_email, reply_to, html, text, is_advertisement, channel)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [req.auth.account.id, b.sender_id ?? null, b.name, subject, b.from_name, b.from_email, b.reply_to ?? null, html, text ?? null, b.is_advertisement ?? req.auth.account.ad_label_default, b.channel ?? 'ses'],
+        `INSERT INTO campaigns (account_id, sender_id, name, subject, from_name, from_email, reply_to, html, text, is_advertisement, channel, inforu_groups)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [req.auth.account.id, b.sender_id ?? null, b.name, subject, b.from_name, b.from_email, b.reply_to ?? null, html, text ?? null, b.is_advertisement ?? req.auth.account.ad_label_default, b.channel ?? 'ses', JSON.stringify(iuGroups ?? [])],
       );
       await setLists(c.id, req.auth.account.id, b.list_ids);
       reply.code(201);
@@ -1012,10 +1035,12 @@ export async function apiRoutes(app: FastifyInstance) {
       if (!['draft', 'scheduled', 'paused'].includes(cur.status)) throw new ApiError(409, 'campaign_locked', 'אי אפשר לערוך דיוור שכבר נשלח');
       const b = campaignBody.partial().parse(req.body);
       checkChannel(req.auth.account, b.channel);
-      const m = { ...cur, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => v !== undefined && k !== 'list_ids' && k !== 'template_id')) };
+      const m = { ...cur, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => v !== undefined && k !== 'list_ids' && k !== 'template_id' && k !== 'inforu_group_ids')) };
+      if (m.channel !== 'inforu') m.inforu_groups = [];
+      else if (b.inforu_group_ids !== undefined) m.inforu_groups = await resolveInforuGroups(req.auth.account, b.inforu_group_ids);
       await query(
-        `UPDATE campaigns SET name=$2, subject=$3, from_name=$4, from_email=$5, reply_to=$6, sender_id=$7, html=$8, text=$9, is_advertisement=$10, channel=$11, updated_at=now() WHERE id=$1`,
-        [id, m.name, m.subject, m.from_name, m.from_email, m.reply_to, m.sender_id, m.html, m.text, m.is_advertisement, m.channel],
+        `UPDATE campaigns SET name=$2, subject=$3, from_name=$4, from_email=$5, reply_to=$6, sender_id=$7, html=$8, text=$9, is_advertisement=$10, channel=$11, inforu_groups=$12, updated_at=now() WHERE id=$1`,
+        [id, m.name, m.subject, m.from_name, m.from_email, m.reply_to, m.sender_id, m.html, m.text, m.is_advertisement, m.channel, JSON.stringify(m.inforu_groups ?? [])],
       );
       if (b.list_ids) await setLists(id, req.auth.account.id, b.list_ids);
       return campaignView(id);
@@ -1064,7 +1089,8 @@ export async function apiRoutes(app: FastifyInstance) {
       if (!acc.company_name || !acc.company_address) throw new ApiError(400, 'missing_legal_details', 'צריך למלא שם עסק וכתובת בהגדרות החשבון. החוק מחייב אותם בכל דיוור');
       if (!c.html && !c.text) throw new ApiError(400, 'empty_campaign', 'לדיוור אין תוכן');
       const lists = await query('SELECT 1 FROM campaign_lists WHERE campaign_id = $1', [id]);
-      if (!lists.length) throw new ApiError(400, 'no_lists', 'לא נבחרו רשימות יעד');
+      const hasIuGroups = c.channel === 'inforu' && (c.inforu_groups ?? []).length > 0;
+      if (!lists.length && !hasIuGroups) throw new ApiError(400, 'no_lists', 'לא נבחרו רשימות יעד');
       // InforU checks the sender address against its own approved senders; SES needs a domain verified here
       if (c.channel === 'inforu') checkChannel(acc, 'inforu');
       else await resolveFrom(acc, c.sender_id, { email: c.from_email, name: c.from_name }, 'reject');

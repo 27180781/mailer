@@ -52,8 +52,19 @@ export async function inforuCall(creds: InforuCredentials, fn: string, data: Rec
 
 /** Checks the credentials (lists the contact groups, which sends nothing) */
 export async function inforuVerify(creds: InforuCredentials) {
+  return { groups: (await inforuGroups(creds)).length };
+}
+
+export interface InforuGroup { id: number; number: number; name: string; recipients: number }
+/** The account's contact groups in InforU, with how many can receive email */
+export async function inforuGroups(creds: InforuCredentials): Promise<InforuGroup[]> {
   const { data } = await inforuCall(creds, 'Contact/GetGroupList', {});
-  return { groups: (data?.List ?? []).length as number };
+  return (data?.List ?? []).map((g: any) => ({
+    id: Number(g.GroupId),
+    number: Number(g.GroupNumber),
+    name: String(g.GroupName ?? ''),
+    recipients: Number(g.CountNonBlockedContactsInfoMail ?? g.CountActiveContactsMail ?? 0),
+  }));
 }
 
 const compact = (o: Record<string, unknown>) =>
@@ -68,6 +79,8 @@ export interface InforuSend {
   subject: string;
   html: string;
   contacts: { email: string; firstName?: string | null; lastName?: string | null }[];
+  /** InforU contact groups to send to as well (by GroupId) */
+  groupIds?: number[];
   allowDuplicates?: boolean;
 }
 
@@ -84,6 +97,7 @@ export async function inforuSend(creds: InforuCredentials, s: InforuSend) {
       Subject: s.subject,
       Body: s.html,
       AllowDuplicates: s.allowDuplicates,
+      IncludeGroupIds: s.groupIds,
       IncludeContacts: s.contacts.map((c) => compact({ Email: c.email, FirstName: c.firstName, LastName: c.lastName })),
     }),
   );
