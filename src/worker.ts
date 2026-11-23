@@ -6,6 +6,7 @@ import { checkDueDomains } from './services/domains.js';
 import { deliverWebhooks } from './services/webhooks.js';
 import { runAutoTrust } from './services/trust.js';
 import { maybeRunScheduledBackup } from './services/backup.js';
+import { processInforuCampaigns } from './services/inforuCampaigns.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let running = true;
@@ -16,7 +17,7 @@ async function claim(limit: number) {
     `UPDATE messages m SET status = 'sending', attempts = attempts + 1, next_attempt_at = now()
      WHERE m.id IN (
        SELECT m2.id FROM messages m2 LEFT JOIN campaigns c ON c.id = m2.campaign_id
-       WHERE m2.status = 'queued' AND m2.next_attempt_at <= now() AND (m2.campaign_id IS NULL OR c.status = 'sending')
+       WHERE m2.status = 'queued' AND m2.next_attempt_at <= now() AND (m2.campaign_id IS NULL OR (c.status = 'sending' AND c.channel = 'ses'))
        ORDER BY m2.priority, m2.next_attempt_at LIMIT $1 FOR UPDATE OF m2 SKIP LOCKED)
      RETURNING *`,
     [limit],
@@ -33,7 +34,7 @@ const recipientsOf = (m: any) => Math.max(1, (m.to_list?.length ?? 0) + (m.cc?.l
 export async function remainingDailyCap(): Promise<number> {
   if (!config.dailySendCap) return Infinity;
   const [row] = await query<{ n: number }>(
-    `SELECT coalesce(sum(${RECIPIENTS_SQL}), 0)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours' AND NOT test`,
+    `SELECT coalesce(sum(${RECIPIENTS_SQL}), 0)::int AS n FROM messages WHERE sent_at > now() - interval '24 hours' AND NOT test AND provider IS DISTINCT FROM 'inforu'`,
   );
   return Math.max(0, config.dailySendCap - (row?.n ?? 0));
 }
@@ -116,6 +117,8 @@ export function startWorker() {
   void every(2_000, 'webhooks', deliverWebhooks);
   void every(10 * 60_000, 'trust', runAutoTrust);
   void every(5 * 60_000, 'backup', maybeRunScheduledBackup);
+  // Campaigns sent through the account's InforUMobile packages instead of SES
+  void every(10_000, 'inforu', processInforuCampaigns);
   // Messages stuck in "sending" after a crash go back to the queue.
   void every(60_000, 'recover', () =>
     query(`UPDATE messages SET status = 'queued' WHERE status = 'sending' AND provider_message_id IS NULL AND next_attempt_at < now() - interval '10 minutes'`),

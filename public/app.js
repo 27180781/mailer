@@ -759,8 +759,12 @@
       <label>שם פנימי<input name="name" value="${esc(c?.name || (preset ? preset.name : ''))}" required></label>
       <label>נושא <small>(אפשר {{name}})</small><input name="subject" value="${esc(c?.subject || preset?.subject || '')}" required></label>
       <label style="font-weight:500"><input type="checkbox" name="is_advertisement" ${(c ? c.is_advertisement : me.account.ad_label_default) ? 'checked' : ''}> להוסיף «פרסומת» בתחילת הנושא <small>(חובה בדיוור פרסומי לפי חוק התקשורת)</small></label>
+      ${me.account.inforu_connected || c?.channel === 'inforu' ? `<label>ערוץ שליחה<select name="channel" id="channel">
+        <option value="ses" ${c?.channel !== 'inforu' ? 'selected' : ''}>המערכת (Amazon SES), ברירת המחדל</option>
+        <option value="inforu" ${c?.channel === 'inforu' ? 'selected' : ''}>InforUMobile, מחבילות הדיוור שלך שם</option></select></label>
+        <p class="role-hint" id="channel-help" style="margin:-8px 0 14px"></p>` : ''}
       <div class="row"><label style="flex:1">שם השולח<input name="from_name" value="${esc(c?.from_name || me.account.name)}" required></label>
-      <div style="flex:1">${senderField(c?.from_email || '', doms)}</div></div>
+      <div style="flex:1" id="sender-box">${c?.channel === 'inforu' ? inforuSenderField(c.from_email) : senderField(c?.from_email || '', doms)}</div></div>
       <label>כתובת לתשובות (לא חובה)<input name="reply_to" class="ltr" value="${esc(c?.reply_to)}"></label>
       <label>רשימות יעד</label><div class="row" style="margin-bottom:12px">${ls.map((l) => `<label style="font-weight:400"><input type="checkbox" name="list" value="${l.id}" ${sel.has(l.id) ? 'checked' : ''}>${esc(l.name)} (${l.members})</label>`).join('') || '<span class="muted">אין רשימות</span>'}</div>
       ${htmlEditor(html)}
@@ -788,6 +792,26 @@
           : `<select name="from_domain" class="ltr" style="border:0;margin:0;width:auto;border-radius:0;background:var(--surface-2);box-shadow:none">${options.map((o) => `<option value="${esc(o)}" ${o === (dom || verified[0]) ? 'selected' : ''}>${esc(o)}${verified.includes(o) ? '' : ' (לא מאומת)'}</option>`).join('')}</select>`}
       </div>
       <small class="muted">אפשר לשלוח מכל כתובת בדומיין מאומת.</small>`;
+  }
+  /** InforU checks the sender against its own approved senders, so any address can be typed */
+  const inforuSenderField = (current) => `<label>כתובת השולח<input name="from_email" type="email" class="ltr" value="${esc(current || '')}" required placeholder="news@example.co.il"></label>
+    <small class="muted">כתובת שמאושרת כשולח בחשבון ה-InforU שלך.</small>`;
+  const CHANNEL_HELP = {
+    ses: '',
+    inforu: 'הדיוור יישלח דרך InforUMobile ויקוזז מהחבילות שלך שם. רשימות, הסרות וחסימות נשמרות כאן כרגיל. נתוני מסירה, פתיחות והקלקות נמצאים בממשק של InforU.',
+  };
+  function bindChannel(doms) {
+    const sel = $('#channel');
+    if (!sel) return;
+    const sync = (initial) => {
+      $('#channel-help').textContent = CHANNEL_HELP[sel.value];
+      if (initial) return;
+      const box = $('#sender-box');
+      const cur = box.querySelector('[name=from_email]')?.value || (box.querySelector('[name=from_local]') ? `${box.querySelector('[name=from_local]').value}@${box.querySelector('[name=from_domain]')?.value || ''}` : '');
+      box.innerHTML = sel.value === 'inforu' ? inforuSenderField(cur.endsWith('@') ? '' : cur) : senderField(cur, doms);
+    };
+    sel.onchange = () => sync(false);
+    sync(true);
   }
   function readCampaignForm(f) {
     const b = formData(f);
@@ -856,6 +880,7 @@
       const preset = !c && presetId ? tpls.find((t) => t.id === presetId) : null;
       $('#view').innerHTML = `<h1>${c ? 'עריכת דיוור' : 'דיוור חדש'}</h1>${campaignForm(c, ls, tpls, preset, doms)}`;
       bindPreviews();
+      bindChannel(doms);
       const form = $('#cf');
       const pick = $('#tpl-pick');
       if (pick) pick.onchange = () => {
@@ -889,11 +914,12 @@
         ${c.status === 'paused' ? '<button class="primary" id="resume">המשך שליחה</button>' : ''}
         ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
         ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
-        <p><b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}</p>
+        <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}</p>
         ${s.total ? `<div class="grid">
           ${statCard('all', s.sent.toLocaleString('he-IL'), `נשלחו${s.queued ? ` · ${s.queued} בתור` : ''}`)}
-          ${statCard('delivered', pct(s.delivered), `נמסרו (${s.delivered})`)}
-          ${s.pending ? statCard('not_opened', pct(s.pending), `ממתינים לאישור מסירה (${s.pending})`, 'sent') : ''}
+          ${c.channel === 'inforu' ? statCard('sent', s.pending.toLocaleString('he-IL'), 'הועברו ל-InforU לשליחה')
+            : `${statCard('delivered', pct(s.delivered), `נמסרו (${s.delivered})`)}
+          ${s.pending ? statCard('not_opened', pct(s.pending), `ממתינים לאישור מסירה (${s.pending})`, 'sent') : ''}`}
           ${statCard('opened', pct(s.opened), `פתחו (${s.opened})`)}
           ${statCard('clicked', pct(s.clicked), `הקליקו (${s.clicked})`)}
           ${statCard('unsubscribed', pct(s.unsubscribed), `הסירו את עצמם (${s.unsubscribed})`)}
@@ -901,7 +927,8 @@
           ${statCard('complained', String(s.complained), 'תלונות ספאם')}
           ${s.failed + s.suppressed ? statCard('failed', String(s.failed + s.suppressed), 'לא נשלחו (חסומים או נכשלו)') : ''}
         </div>
-        ${s.pending && c.started_at && Date.now() - new Date(c.started_at).getTime() > 5 * 60_000 ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>ממתינים לאישור מסירה</b>: המייל יצא מהמערכת, ושרת הדואר של הנמען עוד לא אישר שקיבל אותו. ברוב המקרים Gmail מאט שולח חדש או דיוור גדול שיוצא מהר, ואמזון ממשיכה לנסות שוב ושוב, עד 14 שעות. המספר יתעדכן לבד כשהמיילים יימסרו או יחזרו.</span></div>` : ''}
+        ${c.channel === 'inforu' ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>הדיוור נשלח דרך InforUMobile.</b> נתוני המסירה, הפתיחות וההקלקות נאספים שם, ואפשר לראות אותם בממשק של InforU. הסרות דרך הקישור בתחתית הדיוור נרשמות גם כאן.</span></div>` : ''}
+        ${c.channel !== 'inforu' && s.pending && c.started_at && Date.now() - new Date(c.started_at).getTime() > 5 * 60_000 ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>ממתינים לאישור מסירה</b>: המייל יצא מהמערכת, ושרת הדואר של הנמען עוד לא אישר שקיבל אותו. ברוב המקרים Gmail מאט שולח חדש או דיוור גדול שיוצא מהר, ואמזון ממשיכה לנסות שוב ושוב, עד 14 שעות. המספר יתעדכן לבד כשהמיילים יימסרו או יחזרו.</span></div>` : ''}
         <div class="row between" style="margin-top:28px"><h2 style="margin:0">נמענים</h2>
           <div class="row"><form id="rsearch" class="row" style="margin:0"><input name="s" placeholder="חיפוש מייל או שם" style="margin:0;width:200px"></form>
           <button id="csv">${icon('download')}הורדה לאקסל</button></div></div>
@@ -1012,7 +1039,9 @@
       <label>כתובת השולח <small>(על דומיין מאומת של החשבון, אי אפשר להשיב אליה)</small><input name="fallback_from_email" class="ltr" value="${esc(a.fallback_from_email)}" placeholder="noreply@docs.example.co.il"></label>
       <label>תבנית שם השולח<input name="fallback_name_template" value="${esc(a.fallback_name_template)}"></label>
       <p class="muted">{{name}} = השם שהתבקש, {{account}} = שם החשבון. למשל: «{{name}} באמצעות רצף».</p>` : ''}
-      <button class="primary">שמירה</button></form>`;
+      <button class="primary">שמירה</button></form>
+      ${canAdmin() ? `<div class="card" style="margin-top:20px" id="inforu-card"></div>` : ''}`;
+    renderInforu();
     $('#f').onsubmit = async (e) => {
       e.preventDefault();
       const b = formData(e.target);
@@ -1021,6 +1050,31 @@
       for (const k of ['company_name', 'company_address', 'contact_email', 'fallback_from_email']) if (k in b && !b[k]) b[k] = null;
       try { await api('PATCH', '/v1/account', b); toast('נשמר'); } catch (err) { toast(err.message); }
     };
+  }
+
+  /** Optional: send campaigns through the account's own InforUMobile packages */
+  async function renderInforu() {
+    const box = $('#inforu-card');
+    if (!box) return;
+    const st = await api('GET', '/v1/account/inforu');
+    box.innerHTML = `<h2 style="margin-top:0">InforUMobile <small>(אופציונלי)</small></h2>
+      <p class="muted">אם נשארו לך חבילות דיוור ב-InforUMobile, אפשר לשלוח דרכן דיוורים מהמערכת הזו. בכל דיוור בוחרים ערוץ שליחה, וברירת המחדל נשארת המערכת.</p>
+      ${st.connected
+        ? `<div class="row between"><span><span class="badge good">מחובר</span> משתמש: <span class="ltr">${esc(st.username)}</span></span><button class="danger" id="iu-off">ניתוק</button></div>`
+        : `<form id="iu" class="row" style="align-items:flex-end">
+            <label style="flex:1;margin:0;min-width:160px">שם משתמש ב-InforU<input name="username" class="ltr" required autocomplete="off"></label>
+            <label style="flex:1;margin:0;min-width:200px">טוקן API<input name="token" type="password" class="ltr" required autocomplete="new-password"></label>
+            <button class="primary">חיבור</button></form>
+           <p class="role-hint" style="margin-top:10px">את הטוקן יוצרים בממשק של InforU, בהגדרות ה-API. אם InforU מגבילים לפי כתובת IP, צריך להוסיף שם את כתובת השרת של המערכת. הטוקן נשמר מוצפן ולא מוצג שוב.</p>`}`;
+    const f = $('#iu');
+    if (f) f.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = f.querySelector('button'); btn.disabled = true; btn.textContent = 'בודק מול InforU…';
+      try { await api('PUT', '/v1/account/inforu', formData(f)); toast('InforU חובר'); me = await api('GET', '/v1/me'); renderInforu(); }
+      catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = 'חיבור'; }
+    };
+    const off = $('#iu-off');
+    if (off) off.onclick = async () => { if (confirm('לנתק את InforU? דיוורים שמוגדרים לשליחה דרכו יצטרכו ערוץ אחר.')) { await api('DELETE', '/v1/account/inforu'); me = await api('GET', '/v1/me'); renderInforu(); } };
   }
 
   const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(b / 1024))}KB`);

@@ -66,7 +66,7 @@ export async function resolveFrom(account: any, senderId: string | null, from: {
 
 export async function sentToday(accountId: string): Promise<number> {
   const row = await one<{ n: string }>(
-    `SELECT coalesce(sum(greatest(1, cardinality(to_list) + cardinality(cc) + cardinality(bcc))), 0) AS n FROM messages WHERE account_id = $1 AND NOT test AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem'`,
+    `SELECT coalesce(sum(greatest(1, cardinality(to_list) + cardinality(cc) + cardinality(bcc))), 0) AS n FROM messages WHERE account_id = $1 AND NOT test AND provider IS DISTINCT FROM 'inforu' AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem'`,
     [accountId],
   );
   return Number(row?.n ?? 0);

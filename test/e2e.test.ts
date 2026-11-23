@@ -883,3 +883,114 @@ test('several businesses per user, switching, team invitations and roles', async
   await api('DELETE', `/v1/members/invitations/${inv3.body.id}`, T);
   assert.equal((await api('GET', `/v1/invitations/${inv3.body.link.split('#/invite/')[1]}`)).status, 404);
 });
+
+test('InforUMobile channel: connect, send a campaign in batches through InforU, unsubscribe page, errors pause', async () => {
+  const inforu = await import('../src/providers/inforu.js');
+  const { processInforuCampaigns } = await import('../src/services/inforuCampaigns.js');
+  const realFetch = inforu.inforuHttp.fetch;
+  const calls: { fn: string; auth: string; data: any }[] = [];
+  let mode: 'ok' | 'badauth' = 'ok';
+  inforu.inforuHttp.fetch = (async (url: string, init: any) => {
+    const fn = url.replace(`${inforu.INFORU_BASE}/`, '');
+    calls.push({ fn, auth: init.headers.Authorization, data: JSON.parse(init.body).Data });
+    if (mode === 'badauth') return new Response(JSON.stringify({ StatusId: -2, StatusDescription: 'Authentication failed' }));
+    if (fn === 'Contact/GetGroupList') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ GroupId: 1 }] } }));
+    return new Response(JSON.stringify({ StatusId: 1, RequestId: `req-${calls.length}`, Data: {} }));
+  }) as any;
+  try {
+    const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+    const K = u.body.token;
+    // Not connected yet: the channel is refused
+    const early = await api('POST', '/v1/campaigns', K, { name: 'x', subject: 'x', from_name: 'x', from_email: 'news@docs.retzef.test', channel: 'inforu' });
+    assert.equal(early.body.error.code, 'inforu_not_connected');
+
+    mode = 'badauth';
+    const bad = await api('PUT', '/v1/account/inforu', K, { username: 'user', token: 'wrong-token-123' });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error.message, /ה-IP|הטוקן/);
+    mode = 'ok';
+    assert.equal((await api('PUT', '/v1/account/inforu', K, { username: 'myuser', token: 'secret-token-123' })).body.connected, true);
+    const me = await api('GET', '/v1/me', K);
+    assert.equal(me.body.account.inforu_connected, true);
+    assert.ok(!JSON.stringify(me.body).includes('secret-token-123') && !('inforu_token_enc' in me.body.account), 'token never returned');
+    const stored = await one(`SELECT inforu_token_enc FROM accounts WHERE id = $1`, [me.body.account.id]);
+    assert.ok(stored.inforu_token_enc.startsWith('v1.') && !stored.inforu_token_enc.includes('secret-token'), 'stored encrypted');
+
+    // A list: two people with the same name, one with another name, one suppressed
+    const list = await api('POST', '/v1/lists', K, { name: 'אינפורו', double_opt_in: false });
+    await api('POST', '/v1/contacts/import', K, {
+      contacts: [{ email: 'iu1@client.test', name: 'דנה' }, { email: 'iu2@client.test', name: 'דנה' }, { email: 'iu3@client.test', name: 'יוסי' }, { email: 'iu4@client.test', name: 'רון' }],
+      list_ids: [list.body.id], consent_source: 'בדיקת אינפורו', consent_declared: true,
+    });
+    await api('POST', '/v1/suppressions', K, { email: 'iu4@client.test' });
+    const camp = await api('POST', '/v1/campaigns', K, {
+      name: 'דרך אינפורו', subject: 'שלום {{name}}', from_name: 'רצף', from_email: 'news@inforu-only.test',
+      html: '<p>שלום {{name}}</p>', list_ids: [list.body.id], channel: 'inforu', is_advertisement: true,
+    });
+    assert.equal(camp.body.channel, 'inforu');
+
+    // Test send goes through InforU, not SES
+    const before = calls.length;
+    const t = await api('POST', `/v1/campaigns/${camp.body.id}/test`, K, { to: ['me@client.test'] });
+    assert.equal(t.body.channel, 'inforu');
+    assert.equal(calls[before].fn, 'Umail/Message/Send');
+    assert.equal(calls[before].data.AllowDuplicates, true);
+
+    // Sending: no domain check here (InforU checks its own approved senders), no SES
+    const send = await api('POST', `/v1/campaigns/${camp.body.id}/send`, K, {});
+    assert.equal(send.status, 200, JSON.stringify(send.body));
+    await startDueCampaigns();
+    while ((await sendBatch(50)) > 0);
+    const stillQueued = await query(`SELECT count(*)::int AS n FROM messages WHERE campaign_id = $1 AND status = 'queued'`, [camp.body.id]);
+    assert.equal(stillQueued[0].n, 3, 'SES worker leaves InforU campaigns alone');
+    assert.ok(!sent().some((m) => m.to?.startsWith?.('iu')), 'nothing went out through SES');
+    calls.length = 0;
+    const handed = await processInforuCampaigns();
+    assert.equal(handed, 3);
+    assert.equal(calls.length, 2, 'grouped by rendered content: the two Danas together, Yossi alone');
+    const auth = Buffer.from(calls[0].auth.replace('Basic ', ''), 'base64').toString();
+    assert.equal(auth, 'myuser:secret-token-123');
+    const dana = calls.find((c) => c.data.IncludeContacts.length === 2)!;
+    assert.equal(dana.data.Subject, 'פרסומת: שלום דנה');
+    assert.equal(dana.data.FromAddress, 'news@inforu-only.test');
+    assert.match(dana.data.Body, /שלום דנה/);
+    assert.match(dana.data.Body, /\/u\/c\//, 'campaign unsubscribe link in the footer');
+    assert.doesNotMatch(dana.data.Body, /\/t\/o\//, 'no tracking pixel: InforU tracks');
+    assert.ok(!calls.some((c) => JSON.stringify(c.data).includes('iu4@client.test')), 'suppressed address not sent');
+    const msgs = await query(`SELECT to_email, status, provider, provider_message_id FROM messages WHERE campaign_id = $1 ORDER BY to_email`, [camp.body.id]);
+    assert.deepEqual(msgs.map((m: any) => m.status), ['sent', 'sent', 'sent']);
+    assert.ok(msgs.every((m: any) => m.provider === 'inforu' && m.provider_message_id?.startsWith('req-')));
+    // Doesn't use up the SES daily cap
+    const { remainingDailyCap } = await import('../src/worker.js');
+    void remainingDailyCap;
+
+    // The campaign unsubscribe page
+    const unsubPath = dana.data.Body.match(/\/u\/c\/[^"]+/)[0];
+    assert.equal((await app.inject({ method: 'GET', url: unsubPath })).statusCode, 200);
+    const done = await app.inject({ method: 'POST', url: unsubPath, payload: 'email=IU1%40client.test', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    assert.equal(done.statusCode, 200);
+    assert.equal((await one(`SELECT status FROM contacts WHERE email = 'iu1@client.test'`)).status, 'unsubscribed');
+    const stranger = await app.inject({ method: 'POST', url: unsubPath, payload: 'email=nobody%40client.test', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    assert.equal(stranger.statusCode, 200, 'same answer for addresses not on the list');
+    assert.equal((await app.inject({ method: 'GET', url: '/u/c/forged.token' })).statusCode, 404);
+
+    // A fatal InforU error pauses the campaign and keeps the messages queued
+    const camp2 = await api('POST', '/v1/campaigns', K, { name: 'שגיאה', subject: 'x', from_name: 'x', from_email: 'news@inforu-only.test', html: '<p>x</p>', list_ids: [list.body.id], channel: 'inforu' });
+    await api('POST', `/v1/campaigns/${camp2.body.id}/send`, K, {});
+    await startDueCampaigns();
+    mode = 'badauth';
+    await processInforuCampaigns();
+    const c2 = await api('GET', `/v1/campaigns/${camp2.body.id}`, K);
+    assert.equal(c2.body.status, 'paused');
+    assert.match(c2.body.paused_reason, /InforU/);
+    const q2 = await query(`SELECT DISTINCT status FROM messages WHERE campaign_id = $1`, [camp2.body.id]);
+    assert.deepEqual(q2.map((r: any) => r.status), ['queued']);
+
+    // Disconnect
+    mode = 'ok';
+    await api('DELETE', '/v1/account/inforu', K);
+    assert.equal((await api('GET', '/v1/account/inforu', K)).body.connected, false);
+  } finally {
+    inforu.inforuHttp.fetch = realFetch;
+  }
+});

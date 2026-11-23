@@ -48,7 +48,8 @@ export async function startDueCampaigns() {
       [c.id],
     );
     const used = await sentToday(c.account_id);
-    if ((recipients?.n ?? 0) + used > c.daily_limit) {
+    // The daily limit protects the shared SES reputation; InforU campaigns use the account's own InforU packages
+    if (c.channel !== 'inforu' && (recipients?.n ?? 0) + used > c.daily_limit) {
       await pause(c, `מספר הנמענים (${recipients?.n}) חורג מהמכסה היומית שנותרה (${c.daily_limit - used})`);
       continue;
     }

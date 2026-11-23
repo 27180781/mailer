@@ -102,6 +102,35 @@ export async function publicRoutes(app: FastifyInstance) {
     return page(reply, 'הוסרת מרשימת התפוצה', `<p>לא יישלחו יותר דיוורים מ-${escapeHtml(msg.account_name)} אל ${escapeHtml(msg.to_email)}.</p>`);
   });
 
+  // Campaign-wide unsubscribe page, for campaigns sent through InforU (one body for everyone, so the link can't be
+  // personal). The person types their address; only addresses that got this campaign are unsubscribed.
+  const campaignForToken = async (token: string) => {
+    const id = verifyToken(token);
+    if (!id || !/^[0-9a-f-]{36}$/.test(id)) return null;
+    return one('SELECT c.id, c.account_id, a.name AS account_name FROM campaigns c JOIN accounts a ON a.id = c.account_id WHERE c.id = $1', [id]);
+  };
+  const campaignForm = (c: any, note = '') => `<p>להסרה מהדיוורים של ${escapeHtml(c.account_name)}, כתבו את כתובת המייל שאליה הגיע הדיוור.</p>${note}
+     <form method="post"><input name="email" type="email" required dir="ltr" placeholder="name@example.com" style="width:100%;padding:12px;border:1px solid #d6d3d1;border-radius:10px;font-size:16px;margin-bottom:12px;box-sizing:border-box"><button type="submit">הסירו אותי</button></form>`;
+  app.get('/u/c/:token', async (req, reply) => {
+    const c = await campaignForToken((req.params as any).token);
+    if (!c) return page(reply, 'הקישור לא תקין', '<p>ייתכן שהקישור הועתק באופן חלקי.</p>', 404);
+    return page(reply, 'הסרה מרשימת התפוצה', campaignForm(c));
+  });
+  app.post('/u/c/:token', async (req, reply) => {
+    const c = await campaignForToken((req.params as any).token);
+    if (!c) return page(reply, 'הקישור לא תקין', '<p>ייתכן שהקישור הועתק באופן חלקי.</p>', 404);
+    const e = z.string().trim().toLowerCase().email().safeParse((req.body as any)?.email);
+    if (!e.success) return page(reply, 'הסרה מרשימת התפוצה', campaignForm(c, '<p style="color:#b91c1c">הכתובת לא תקינה</p>'), 400);
+    const msg = await one('SELECT * FROM messages WHERE campaign_id = $1 AND to_email = $2 LIMIT 1', [c.id, e.data]);
+    // Same answer either way, so the page can't be used to find out who is on the list
+    if (msg) {
+      await unsubscribeContact(c.account_id, e.data);
+      await query(`INSERT INTO events (account_id, message_id, type, data) VALUES ($1, $2, 'unsubscribed', '{"via":"campaign_page"}')`, [c.account_id, msg.id]);
+      await emitEvent(c.account_id, 'email.unsubscribed', { message_id: msg.id, to: e.data, campaign_id: c.id, metadata: msg.metadata });
+    }
+    return page(reply, 'הבקשה התקבלה', `<p>אם הכתובת ${escapeHtml(e.data)} קיבלה את הדיוור, היא הוסרה ולא יישלחו אליה יותר דיוורים מ-${escapeHtml(c.account_name)}.</p>`);
+  });
+
   app.get('/t/o/:token', async (req, reply) => {
     const id = verifyToken((req.params as any).token);
     if (id) void recordEngagement(id, 'opened').catch(() => {});
