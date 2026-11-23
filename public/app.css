@@ -256,3 +256,6 @@ iframe { box-shadow: var(--shadow); }
 .acct-item .grow { flex: 1; min-width: 0; }
 .acct-item .grow b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .role-hint { font-size: 13px; color: var(--muted); }
+
+.stat-link { text-align: right; cursor: pointer; font: inherit; color: inherit; width: 100%; }
+.stat-link:hover { border-color: var(--brand); }

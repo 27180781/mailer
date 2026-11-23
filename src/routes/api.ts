@@ -391,6 +391,15 @@ export async function apiRoutes(app: FastifyInstance) {
                 (SELECT count(*)::int FROM domains WHERE account_id = $1) AS domains`,
         [req.auth.account.id],
       );
+      // Not yet confirmed by the receiving server (in flight or deferred, e.g. by Gmail rate limits), and unsubscribes
+      const [extra] = await query(
+        `SELECT (SELECT count(*)::int FROM messages WHERE account_id = $1 AND status = 'sent' AND NOT test
+                   AND (created_at AT TIME ZONE 'Asia/Jerusalem')::date > (now() AT TIME ZONE 'Asia/Jerusalem')::date - $2::int) AS pending,
+                (SELECT count(*)::int FROM events e JOIN messages m ON m.id = e.message_id WHERE e.account_id = $1 AND e.type = 'unsubscribed' AND NOT m.test
+                   AND (e.created_at AT TIME ZONE 'Asia/Jerusalem')::date > (now() AT TIME ZONE 'Asia/Jerusalem')::date - $2::int) AS unsubscribed`,
+        [req.auth.account.id, days],
+      );
+      Object.assign(totals, extra);
       return { days, daily, totals, counts };
     });
 
@@ -1053,6 +1062,7 @@ export async function apiRoutes(app: FastifyInstance) {
       all: 'true',
       sent: `m.status IN ('sent','delivered','bounced','complained')`,
       delivered: `m.status = 'delivered'`,
+      sent_pending: `m.status = 'sent'`,
       opened: 'm.opened_at IS NOT NULL',
       not_opened: `m.opened_at IS NULL AND m.status IN ('sent','delivered')`,
       clicked: 'm.clicked_at IS NOT NULL',
@@ -1094,7 +1104,7 @@ export async function apiRoutes(app: FastifyInstance) {
       const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
       const q = recipientsQuery.parse(req.query);
       const rows = await campaignRecipients(id, q.filter, q.search, 1_000_000, 0);
-      const STATUS_HE: Record<string, string> = { queued: 'בתור', sending: 'בשליחה', sent: 'נשלח', delivered: 'נמסר', bounced: 'חזר', complained: 'תלונת ספאם', failed: 'נכשל', suppressed: 'חסום' };
+      const STATUS_HE: Record<string, string> = { queued: 'בתור', sending: 'בשליחה', sent: 'ממתין לאישור מסירה', delivered: 'נמסר', bounced: 'חזר', complained: 'תלונת ספאם', failed: 'נכשל', suppressed: 'חסום' };
       const cell = (v: unknown) => {
         const t = v == null ? '' : v instanceof Date ? v.toISOString().replace('T', ' ').slice(0, 19) : String(v);
         return /[",\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"` : t;

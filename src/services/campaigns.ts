@@ -12,13 +12,14 @@ export async function campaignStats(campaignId: string) {
        count(*) FILTER (WHERE status = 'queued' OR status = 'sending')::int AS queued,
        count(*) FILTER (WHERE status IN ('sent','delivered','bounced','complained'))::int AS sent,
        count(*) FILTER (WHERE status = 'delivered')::int AS delivered,
+       count(*) FILTER (WHERE status = 'sent')::int AS pending,
        count(*) FILTER (WHERE status = 'bounced')::int AS bounced,
        count(*) FILTER (WHERE status = 'complained')::int AS complained,
        count(*) FILTER (WHERE status = 'failed')::int AS failed,
        count(*) FILTER (WHERE status = 'suppressed')::int AS suppressed,
        count(opened_at)::int AS opened,
        count(clicked_at)::int AS clicked
-     FROM messages WHERE campaign_id = $1`,
+     FROM messages WHERE campaign_id = $1 AND NOT test`,
     [campaignId],
   );
   const unsub = await one<{ n: number }>(`SELECT count(*)::int AS n FROM events e JOIN messages m ON m.id = e.message_id WHERE m.campaign_id = $1 AND e.type = 'unsubscribed'`, [campaignId]);

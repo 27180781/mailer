@@ -411,9 +411,10 @@
         <div class="actions"><a href="#/campaigns/new"><button class="primary">${icon('plus')}דיוור חדש</button></a></div></div>
       <div class="grid">
         <div class="card stat"><div class="ico">${icon('send', 20)}</div><div class="n">${t.sent.toLocaleString('he-IL')}</div><div class="l">מיילים נשלחו</div></div>
-        <div class="card stat"><div class="ico good">${icon('check', 20)}</div><div class="n">${pct(t.delivered, t.sent)}</div><div class="l">נמסרו בהצלחה</div></div>
+        <div class="card stat"><div class="ico good">${icon('check', 20)}</div><div class="n">${pct(t.delivered, t.sent)}</div><div class="l">נמסרו בהצלחה${t.pending ? ` · ${pct(t.pending, t.sent)} ממתינים לאישור מסירה` : ''}</div></div>
         <div class="card stat"><div class="ico info">${icon('eye', 20)}</div><div class="n">${pct(t.opened, t.sent)}</div><div class="l">נפתחו · ${pct(t.clicked, t.sent)} הקליקו</div></div>
         <div class="card stat"><div class="ico warn">${icon('bounce', 20)}</div><div class="n">${pct(t.problems, t.sent)}</div><div class="l">חזרות, תלונות ושגיאות</div></div>
+        <div class="card stat"><div class="ico">${icon('x', 20)}</div><div class="n">${(t.unsubscribed || 0).toLocaleString('he-IL')}</div><div class="l">הסירו את עצמם מהדיוור (${pct(t.unsubscribed || 0, t.sent)})</div></div>
       </div>
       <div class="grid-2" style="margin-top:16px">
         <div class="card chart-card">
@@ -801,6 +802,51 @@
     if (!b.reply_to) b.reply_to = null;
     return b;
   }
+  const RFILTERS = { all: 'כולם', delivered: 'נמסרו', sent: 'ממתינים לאישור', opened: 'פתחו', not_opened: 'לא פתחו', clicked: 'הקליקו', unsubscribed: 'הסירו את עצמם', bounced: 'חזרו', complained: 'תלונות', failed: 'לא נשלחו' };
+  /** A stat card that filters the recipients list when clicked */
+  const statCard = (filter, n, label, apiFilter) => `<button type="button" class="card stat stat-link" data-rf-card="${apiFilter || filter}"><div class="n">${n}</div><div class="l">${label}</div></button>`;
+  const REC_STATUS = (r) => r.status === 'sent' ? '<span class="badge warn">ממתין לאישור</span>' : badge(r.status);
+
+  /** Recipients table (filter, search, paging, CSV) and clicks per link, under a campaign's stats */
+  async function campaignReport(id, name) {
+    let filter = 'all', search = '', offset = 0;
+    const PAGE = 100;
+    const filterName = (f) => (f === 'sent' ? 'sent' : f);
+    async function load() {
+      const apiFilter = filter === 'sent' ? 'sent_pending' : filter;
+      const q = new URLSearchParams({ filter: apiFilter, limit: PAGE, offset, ...(search ? { search } : {}) });
+      const r = await api('GET', `/v1/campaigns/${id}/recipients?${q}`);
+      const box = $('#recipients');
+      if (!box) return;
+      box.innerHTML = r.items.length ? `<div class="table-wrap"><table><tr><th>מייל</th><th>שם</th><th>מצב</th><th>נפתח</th><th>הקלקות</th><th>הסרה</th></tr>
+        ${r.items.map((x) => `<tr><td class="ltr">${esc(x.email)}</td><td>${esc(x.name || '')}</td><td>${REC_STATUS(x)}${x.last_error ? `<div class="role-hint">${esc(x.last_error)}</div>` : ''}</td>
+          <td>${x.opened_at ? `${fmtDate(x.opened_at)}${x.opens > 1 ? ` <span class="role-hint">(${x.opens} פעמים)</span>` : ''}` : '—'}</td>
+          <td>${x.clicks || '—'}</td><td>${x.unsubscribed ? '<span class="badge warn">הסיר/ה</span>' : ''}</td></tr>`).join('')}</table></div>
+        <div class="row between" style="margin-top:10px"><span class="role-hint">${r.total.toLocaleString('he-IL')} נמענים${r.total > PAGE ? ` · מוצגים ${offset + 1}–${Math.min(offset + PAGE, r.total)}` : ''}</span>
+          <div class="row">${offset > 0 ? '<button id="rprev">הקודמים</button>' : ''}${offset + PAGE < r.total ? '<button id="rnext">הבאים</button>' : ''}</div></div>`
+        : empty('users', 'אין נמענים בסינון הזה', search ? 'נסו חיפוש אחר.' : '');
+      const prev = $('#rprev'), next = $('#rnext');
+      if (prev) prev.onclick = () => { offset = Math.max(0, offset - PAGE); load(); };
+      if (next) next.onclick = () => { offset += PAGE; load(); };
+    }
+    const setFilter = (f) => {
+      filter = filterName(f); offset = 0;
+      document.querySelectorAll('[data-rf]').forEach((b) => b.classList.toggle('active', b.dataset.rf === filter));
+      load();
+    };
+    document.querySelectorAll('[data-rf]').forEach((b) => (b.onclick = () => setFilter(b.dataset.rf)));
+    document.querySelectorAll('[data-rf-card]').forEach((b) => (b.onclick = () => { setFilter(b.dataset.rfCard); $('#rtabs').scrollIntoView({ behavior: 'smooth', block: 'center' }); }));
+    $('#rsearch').onsubmit = (e) => { e.preventDefault(); search = formData(e.target).s.trim(); offset = 0; load(); };
+    $('#csv').onclick = () => {
+      const apiFilter = filter === 'sent' ? 'sent_pending' : filter;
+      download(`/v1/campaigns/${id}/recipients.csv?${new URLSearchParams({ filter: apiFilter, ...(search ? { search } : {}) })}`, `${name}-${RFILTERS[filter]}.csv`);
+    };
+    load();
+    const links = await api('GET', `/v1/campaigns/${id}/links`);
+    if (links.length && $('#links')) $('#links').innerHTML = `<h2>הקלקות לפי קישור</h2><div class="table-wrap"><table><tr><th>קישור</th><th>נמענים שהקליקו</th><th>סה״כ הקלקות</th></tr>
+      ${links.map((l) => `<tr><td class="ltr" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url)}</a></td><td>${l.unique_clicks}</td><td>${l.clicks}</td></tr>`).join('')}</table></div>`;
+  }
+
   async function campaigns(id, sub) {
     const ls = await api('GET', '/v1/lists');
     if (id === 'new' || sub === 'edit') {
@@ -844,15 +890,27 @@
         ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
         ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
         <p><b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}</p>
-        <div class="grid">
-          <div class="card stat"><div class="n">${s.sent}</div><div class="l">נשלחו (${s.queued} בתור)</div></div>
-          <div class="card stat"><div class="n">${pct(s.opened)}</div><div class="l">פתחו (${s.opened})</div></div>
-          <div class="card stat"><div class="n">${pct(s.clicked)}</div><div class="l">הקליקו (${s.clicked})</div></div>
-          <div class="card stat"><div class="n">${pct(s.bounced)}</div><div class="l">חזרו (${s.bounced})</div></div>
-          <div class="card stat"><div class="n">${s.complained}</div><div class="l">תלונות ספאם</div></div>
-          <div class="card stat"><div class="n">${s.unsubscribed}</div><div class="l">הסירו את עצמם</div></div>
+        ${s.total ? `<div class="grid">
+          ${statCard('all', s.sent.toLocaleString('he-IL'), `נשלחו${s.queued ? ` · ${s.queued} בתור` : ''}`)}
+          ${statCard('delivered', pct(s.delivered), `נמסרו (${s.delivered})`)}
+          ${s.pending ? statCard('not_opened', pct(s.pending), `ממתינים לאישור מסירה (${s.pending})`, 'sent') : ''}
+          ${statCard('opened', pct(s.opened), `פתחו (${s.opened})`)}
+          ${statCard('clicked', pct(s.clicked), `הקליקו (${s.clicked})`)}
+          ${statCard('unsubscribed', pct(s.unsubscribed), `הסירו את עצמם (${s.unsubscribed})`)}
+          ${statCard('bounced', pct(s.bounced), `חזרו (${s.bounced})`)}
+          ${statCard('complained', String(s.complained), 'תלונות ספאם')}
+          ${s.failed + s.suppressed ? statCard('failed', String(s.failed + s.suppressed), 'לא נשלחו (חסומים או נכשלו)') : ''}
         </div>
+        ${s.pending && c.started_at && Date.now() - new Date(c.started_at).getTime() > 5 * 60_000 ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>ממתינים לאישור מסירה</b>: המייל יצא מהמערכת, ושרת הדואר של הנמען עוד לא אישר שקיבל אותו. ברוב המקרים Gmail מאט שולח חדש או דיוור גדול שיוצא מהר, ואמזון ממשיכה לנסות שוב ושוב, עד 14 שעות. המספר יתעדכן לבד כשהמיילים יימסרו או יחזרו.</span></div>` : ''}
+        <div class="row between" style="margin-top:28px"><h2 style="margin:0">נמענים</h2>
+          <div class="row"><form id="rsearch" class="row" style="margin:0"><input name="s" placeholder="חיפוש מייל או שם" style="margin:0;width:200px"></form>
+          <button id="csv">${icon('download')}הורדה לאקסל</button></div></div>
+        <div class="tabs" id="rtabs" style="margin:12px 0;flex-wrap:wrap">${Object.entries(RFILTERS).map(([k, l]) => `<button data-rf="${k}" class="${k === 'all' ? 'active' : ''}">${l}</button>`).join('')}</div>
+        <div id="recipients"><div class="loading"><div class="spinner"></div>טוען…</div></div>
+        <div id="links"></div>
+        <p class="role-hint" style="margin-top:12px">פתיחות נמדדות לפי תמונה שקופה במייל. חלק מתוכנות הדואר חוסמות תמונות, ו-Apple Mail פותח מיילים אוטומטית, ולכן מספר הפתיחות הוא הערכה. הקלקות והסרות מדויקות.</p>` : ''}
         <h2>תצוגה מקדימה</h2><iframe sandbox style="width:100%;height:480px;border:1px solid var(--line);border-radius:10px;background:#fff" srcdoc="${esc(c.html)}"></iframe>`;
+      if (s.total) campaignReport(id, c.name);
       const act = (sel, fn) => { const b = $(sel); if (b) b.onclick = async () => { try { await fn(); campaigns(id); } catch (err) { toast(err.message); } }; };
       act('#send', async () => { if (confirm('לשלוח את הדיוור עכשיו לכל הנמענים ברשימות?')) await api('POST', `/v1/campaigns/${id}/send`, {}); });
       act('#pause', () => api('POST', `/v1/campaigns/${id}/pause`));
