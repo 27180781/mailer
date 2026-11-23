@@ -1048,6 +1048,93 @@ export async function apiRoutes(app: FastifyInstance) {
       return campaignStats(id);
     });
 
+    /** Who got the campaign and what each recipient did. Filters match the stat cards. */
+    const RECIPIENT_FILTERS: Record<string, string> = {
+      all: 'true',
+      sent: `m.status IN ('sent','delivered','bounced','complained')`,
+      delivered: `m.status = 'delivered'`,
+      opened: 'm.opened_at IS NOT NULL',
+      not_opened: `m.opened_at IS NULL AND m.status IN ('sent','delivered')`,
+      clicked: 'm.clicked_at IS NOT NULL',
+      bounced: `m.status = 'bounced'`,
+      complained: `m.status = 'complained'`,
+      unsubscribed: `EXISTS (SELECT 1 FROM events e WHERE e.message_id = m.id AND e.type = 'unsubscribed')`,
+      failed: `m.status IN ('failed','suppressed')`,
+      queued: `m.status IN ('queued','sending')`,
+    };
+    const recipientsQuery = z.object({
+      filter: z.enum(Object.keys(RECIPIENT_FILTERS) as [string, ...string[]]).default('all'),
+      search: z.preprocess(blank, z.string().max(200).optional()),
+    });
+    async function campaignRecipients(campaignId: string, filter: string, search: string | undefined, limit: number, offset: number) {
+      return query(
+        `SELECT m.id AS message_id, m.to_email AS email, c.name, m.status, m.sent_at, m.opened_at, m.clicked_at, m.last_error,
+           (SELECT count(*)::int FROM events e WHERE e.message_id = m.id AND e.type = 'opened') AS opens,
+           (SELECT count(*)::int FROM events e WHERE e.message_id = m.id AND e.type = 'clicked') AS clicks,
+           EXISTS (SELECT 1 FROM events e WHERE e.message_id = m.id AND e.type = 'unsubscribed') AS unsubscribed,
+           count(*) OVER() AS total
+         FROM messages m LEFT JOIN contacts c ON c.id = m.contact_id
+         WHERE m.campaign_id = $1 AND NOT m.test AND ${RECIPIENT_FILTERS[filter]}
+           AND ($2::text IS NULL OR m.to_email ILIKE '%' || $2 || '%' OR c.name ILIKE '%' || $2 || '%')
+         ORDER BY m.clicked_at DESC NULLS LAST, m.opened_at DESC NULLS LAST, m.to_email
+         LIMIT $3 OFFSET $4`,
+        [campaignId, search ?? null, limit, offset],
+      );
+    }
+    r.get('/v1/campaigns/:id/recipients', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      const q = page.merge(recipientsQuery).parse(req.query);
+      const rows = await campaignRecipients(id, q.filter, q.search, q.limit, q.offset);
+      return { total: Number(rows[0]?.total ?? 0), items: rows.map(({ total, ...r }: any) => r) };
+    });
+    /** The same list as a CSV file (Excel opens it in Hebrew thanks to the BOM) */
+    r.get('/v1/campaigns/:id/recipients.csv', async (req, reply) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      const q = recipientsQuery.parse(req.query);
+      const rows = await campaignRecipients(id, q.filter, q.search, 1_000_000, 0);
+      const STATUS_HE: Record<string, string> = { queued: 'בתור', sending: 'בשליחה', sent: 'נשלח', delivered: 'נמסר', bounced: 'חזר', complained: 'תלונת ספאם', failed: 'נכשל', suppressed: 'חסום' };
+      const cell = (v: unknown) => {
+        const t = v == null ? '' : v instanceof Date ? v.toISOString().replace('T', ' ').slice(0, 19) : String(v);
+        return /[",\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"` : t;
+      };
+      const lines = [['מייל', 'שם', 'מצב', 'נשלח', 'נפתח לראשונה', 'פתיחות', 'הקלקה ראשונה', 'הקלקות', 'הסיר את עצמו', 'שגיאה'].join(',')];
+      for (const r of rows as any[])
+        lines.push([r.email, r.name, STATUS_HE[r.status] ?? r.status, r.sent_at, r.opened_at, r.opens, r.clicked_at, r.clicks, r.unsubscribed ? 'כן' : '', r.last_error].map(cell).join(','));
+      const name = `${String(c.name).replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'campaign'}-${q.filter}.csv`;
+      reply.header('content-type', 'text/csv; charset=utf-8');
+      reply.header('content-disposition', `attachment; filename="campaign.csv"; filename*=UTF-8''${encodeURIComponent(name)}`);
+      return '\uFEFF' + lines.join('\r\n') + '\r\n';
+    });
+    /** Clicks per link: total clicks and how many different recipients clicked it */
+    r.get('/v1/campaigns/:id/links', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      return query(
+        `SELECT e.data->>'url' AS url, count(*)::int AS clicks, count(DISTINCT e.message_id)::int AS unique_clicks
+         FROM events e JOIN messages m ON m.id = e.message_id
+         WHERE m.campaign_id = $1 AND NOT m.test AND e.type = 'clicked' AND e.data ? 'url'
+         GROUP BY 1 ORDER BY unique_clicks DESC, clicks DESC LIMIT 100`,
+        [id],
+      );
+    });
+    /** Opens and clicks per hour since sending started (first 7 days) */
+    r.get('/v1/campaigns/:id/timeline', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      if (!c.started_at) return [];
+      return query(
+        `SELECT floor(extract(epoch FROM e.created_at - $2::timestamptz) / 3600)::int AS hour,
+           count(DISTINCT e.message_id) FILTER (WHERE e.type = 'opened')::int AS opened,
+           count(DISTINCT e.message_id) FILTER (WHERE e.type = 'clicked')::int AS clicked
+         FROM events e JOIN messages m ON m.id = e.message_id
+         WHERE m.campaign_id = $1 AND NOT m.test AND e.type IN ('opened','clicked') AND e.created_at < $2::timestamptz + interval '7 days'
+         GROUP BY 1 ORDER BY 1`,
+        [id, c.started_at],
+      );
+    });
+
     // ---------- Suppressions (account level) ----------
     r.get('/v1/suppressions', async (req) => {
       const q = page.extend({ email: z.string().optional() }).parse(req.query);
