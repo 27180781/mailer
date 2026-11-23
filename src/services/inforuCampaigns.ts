@@ -15,13 +15,14 @@ export function inforuCredentials(account: any): InforuCredentials | null {
 /** One unsubscribe page per campaign (InforU sends a single body to many people, so the link can't be personal) */
 export const campaignUnsubscribeUrl = (campaignId: string) => `${config.publicUrl}/u/c/${signToken(campaignId)}`;
 
-/** Legal footer for InforU campaigns: company details and our campaign unsubscribe page; InforU adds its own link too */
-function inforuFooter(account: any, campaignId: string) {
+/**
+ * InforU appends its own footer with an unsubscribe link and a spam report link. We add only what the law needs
+ * and InforU doesn't show: the sender's business name, address and contact email. No second unsubscribe line.
+ */
+function inforuFooter(account: any) {
   const parts = [account.company_name, account.company_address, account.contact_email].filter(Boolean).map((s: string) => escapeHtml(String(s)));
-  return `<div dir="rtl" style="margin-top:32px;padding-top:16px;border-top:1px solid #ddd;font-family:Arial,sans-serif;font-size:12px;color:#666;text-align:center;line-height:1.6">
-${parts.length ? `<div>${parts.join(' · ')}</div>` : ''}
-<div>קיבלת את המייל הזה כי נרשמת לקבלת עדכונים. <a href="${campaignUnsubscribeUrl(campaignId)}" style="color:#666">להסרה מרשימת התפוצה לחצו כאן</a></div>
-</div>`;
+  if (!parts.length) return '';
+  return `<div dir="rtl" style="margin-top:24px;font-family:Arial,sans-serif;font-size:12px;color:#888;text-align:center;line-height:1.6">${parts.join(' · ')}</div>`;
 }
 
 /** Renders the campaign for one contact. Identical results are grouped into one InforU call. */
@@ -30,7 +31,7 @@ function render(campaign: any, account: any, contact: any, email: string) {
   let subject = personalize(campaign.subject, vars, false);
   if (campaign.is_advertisement) subject = advertisingSubject(subject);
   let html = personalize(campaign.html || `<div dir="rtl">${escapeHtml(campaign.text ?? '')}</div>`, vars, true);
-  html = insertFooter(html, inforuFooter(account, campaign.id));
+  html = insertFooter(html, inforuFooter(account));
   return { subject, html };
 }
 

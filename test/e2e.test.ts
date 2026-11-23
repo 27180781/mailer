@@ -954,7 +954,7 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     assert.equal(dana.data.Subject, 'פרסומת: שלום דנה');
     assert.equal(dana.data.FromAddress, 'news@inforu-only.test');
     assert.match(dana.data.Body, /שלום דנה/);
-    assert.match(dana.data.Body, /\/u\/c\//, 'campaign unsubscribe link in the footer');
+    assert.doesNotMatch(dana.data.Body, /להסרה|\/u\//, 'no second unsubscribe line: InforU adds its own footer');
     assert.doesNotMatch(dana.data.Body, /\/t\/o\//, 'no tracking pixel: InforU tracks');
     assert.ok(!calls.some((c) => JSON.stringify(c.data).includes('iu4@client.test')), 'suppressed address not sent');
     const msgs = await query(`SELECT to_email, status, provider, provider_message_id FROM messages WHERE campaign_id = $1 ORDER BY to_email`, [camp.body.id]);
@@ -965,7 +965,8 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     void remainingDailyCap;
 
     // The campaign unsubscribe page
-    const unsubPath = dana.data.Body.match(/\/u\/c\/[^"]+/)[0];
+    const { campaignUnsubscribeUrl } = await import('../src/services/inforuCampaigns.js');
+    const unsubPath = new URL(campaignUnsubscribeUrl(camp.body.id)).pathname;
     assert.equal((await app.inject({ method: 'GET', url: unsubPath })).statusCode, 200);
     const done = await app.inject({ method: 'POST', url: unsubPath, payload: 'email=IU1%40client.test', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
     assert.equal(done.statusCode, 200);

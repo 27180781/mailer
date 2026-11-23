@@ -799,7 +799,7 @@
     <small class="muted">כתובת שמאושרת כשולח בחשבון ה-InforU שלך.</small>`;
   const CHANNEL_HELP = {
     ses: '',
-    inforu: 'הדיוור יישלח דרך InforUMobile ויקוזז מהחבילות שלך שם. רשימות, הסרות וחסימות נשמרות כאן כרגיל. נתוני מסירה, פתיחות והקלקות נמצאים בממשק של InforU.',
+    inforu: 'הדיוור יישלח דרך InforUMobile ויקוזז מהחבילות שלך שם. מי שהסיר את עצמו או נחסם כאן לא יקבל אותו. InforU מוסיף תחתית משלו עם קישור הסרה, ומשלנו נשארת רק שורת פרטי העסק. נתוני מסירה, פתיחות, הקלקות והסרות נמצאים בממשק של InforU.',
   };
   function bindChannel(doms) {
     const sel = $('#channel');
@@ -949,7 +949,7 @@
           ${statCard('complained', String(s.complained), 'תלונות ספאם')}
           ${s.failed + s.suppressed ? statCard('failed', String(s.failed + s.suppressed), 'לא נשלחו (חסומים או נכשלו)') : ''}
         </div>
-        ${c.channel === 'inforu' ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>הדיוור נשלח דרך InforUMobile.</b> נתוני המסירה, הפתיחות וההקלקות נאספים שם, ואפשר לראות אותם בממשק של InforU. הסרות דרך הקישור בתחתית הדיוור נרשמות גם כאן.</span></div>` : ''}
+        ${c.channel === 'inforu' ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>הדיוור נשלח דרך InforUMobile.</b> נתוני המסירה, הפתיחות, ההקלקות וההסרות נאספים שם, ואפשר לראות אותם בממשק של InforU.</span></div>` : ''}
         ${c.channel !== 'inforu' && s.pending && c.started_at && Date.now() - new Date(c.started_at).getTime() > 5 * 60_000 ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>ממתינים לאישור מסירה</b>: המייל יצא מהמערכת, ושרת הדואר של הנמען עוד לא אישר שקיבל אותו. ברוב המקרים Gmail מאט שולח חדש או דיוור גדול שיוצא מהר, ואמזון ממשיכה לנסות שוב ושוב, עד 14 שעות. המספר יתעדכן לבד כשהמיילים יימסרו או יחזרו.</span></div>` : ''}
         <div class="row between" style="margin-top:28px"><h2 style="margin:0">נמענים</h2>
           <div class="row"><form id="rsearch" class="row" style="margin:0"><input name="s" placeholder="חיפוש מייל או שם" style="margin:0;width:200px"></form>
