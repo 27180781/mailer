@@ -603,38 +603,87 @@
       ${list.map((m) => `<tr><td class="ltr">${esc(m.to_email)}${m.cc?.length || m.bcc?.length ? ` <span class="badge info">+${(m.cc?.length || 0) + (m.bcc?.length || 0)}</span>` : ''}${m.test ? ' <span class="badge">בדיקה</span>' : ''}</td><td>${esc(m.subject)}</td><td class="ltr">${esc(m.from_email)}${m.used_fallback ? ' <span class="badge warn">גיבוי</span>' : ''}</td><td>${badge(m.status)}${m.last_error ? `<br><small>${esc(m.last_error)}</small>` : ''}</td><td>${fmtDate(m.created_at)}</td></tr>`).join('')}</table></div>`;
   }
 
+  /**
+   * Finds the addresses in pasted text or a file: a CSV with an email column (and maybe a name column), one per line,
+   * or anything else (comma/space separated, "Name <a@b.co>", copied from Excel, Gmail or WhatsApp). Duplicates removed.
+   */
+  const EMAIL_HEADS = ['email', 'e-mail', 'mail', 'מייל', 'אימייל', 'דוא"ל', 'דואר אלקטרוני'];
+  const EMAIL_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
   function parseCsv(text) {
-    const rows = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(/[,;\t]/).map((c) => c.trim().replace(/^"|"$/g, '')));
-    if (!rows.length) return [];
-    const head = rows[0].map((h) => h.toLowerCase());
-    const hasHead = head.some((h) => ['email', 'מייל', 'אימייל', 'דוא"ל'].includes(h));
-    const ei = hasHead ? head.findIndex((h) => ['email', 'מייל', 'אימייל', 'דוא"ל'].includes(h)) : 0;
-    const ni = hasHead ? head.findIndex((h) => ['name', 'שם'].includes(h)) : 1;
-    return rows.slice(hasHead ? 1 : 0).filter((r) => /@/.test(r[ei] || '')).map((r) => ({ email: r[ei], name: ni >= 0 ? r[ni] || null : null }));
+    const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+    const split = (l) => l.split(/[,;\t]/).map((c) => c.trim().replace(/^"|"$/g, ''));
+    const head = lines.length ? split(lines[0]).map((h) => h.toLowerCase()) : [];
+    const ei = head.findIndex((h) => EMAIL_HEADS.includes(h));
+    let rows = [];
+    if (ei >= 0) {
+      // A table with headers: take the email and name columns
+      const ni = head.findIndex((h) => ['name', 'full name', 'שם', 'שם מלא'].includes(h));
+      rows = lines.slice(1).map(split).map((r) => ({ email: (r[ei] || '').match(EMAIL_RE)?.[0], name: ni >= 0 ? r[ni] || null : null }));
+    } else {
+      // Free text: every address, with the name when written as "Name <a@b.co>" or "a@b.co,Name"
+      for (const line of lines) {
+        const named = [...line.matchAll(/"?([^"<>,;\t]*?)"?\s*<([^<>\s]+@[^<>\s]+)>/g)];
+        if (named.length) { named.forEach((m) => rows.push({ email: m[2], name: m[1].trim() || null })); continue; }
+        const found = line.match(EMAIL_RE) || [];
+        const cells = split(line);
+        if (found.length === 1 && cells.length === 2 && cells[0].includes('@') && !cells[1].includes('@')) rows.push({ email: found[0], name: cells[1] || null });
+        else found.forEach((e) => rows.push({ email: e, name: null }));
+      }
+    }
+    const seen = new Set();
+    return rows.filter((r) => {
+      if (!r.email) return false;
+      r.email = r.email.toLowerCase().replace(/[.,;]+$/, '');
+      if (seen.has(r.email)) return false;
+      seen.add(r.email);
+      return true;
+    });
   }
   async function contacts() {
     const q = new URLSearchParams(location.hash.split('?')[1] || '');
     const [data, ls] = await Promise.all([api('GET', `/v1/contacts?limit=100&search=${encodeURIComponent(q.get('s') || '')}`), api('GET', '/v1/lists')]);
-    $('#view').innerHTML = `<div class="page-head"><h1>אנשי קשר <small>(${data.total.toLocaleString('he-IL')})</small></h1><button class="primary" id="imp">ייבוא מקובץ</button></div>
+    $('#view').innerHTML = `<div class="page-head"><h1>אנשי קשר <small>(${data.total.toLocaleString('he-IL')})</small></h1><button class="primary" id="imp">${icon('upload')}ייבוא או הדבקה</button></div>
       <form id="search" class="row"><input name="s" value="${esc(q.get('s') || '')}" placeholder="חיפוש לפי מייל או שם" style="flex:1"><button>חיפוש</button></form>
       <div class="table-wrap" style="margin-top:12px"><table><tr><th>מייל</th><th>שם</th><th>מצב</th><th>מקור ההסכמה</th><th>נוסף</th></tr>
       ${data.items.map((c) => `<tr><td class="ltr">${esc(c.email)}</td><td>${esc(c.name)}</td><td>${badge(c.status)}</td><td>${esc(c.consent_source)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
     $('#search').onsubmit = (e) => { e.preventDefault(); location.hash = `#/contacts?s=${encodeURIComponent(formData(e.target).s)}`; };
     $('#imp').onclick = () => {
-      modal(`<h2>ייבוא אנשי קשר</h2><p class="muted">קובץ CSV עם עמודת מייל, ואפשר גם עמודת שם. אפשר גם להדביק.</p>
-        <input type="file" id="file" accept=".csv,.txt"><label>או הדבקה<textarea id="paste" placeholder="email,name"></textarea></label>
+      modal(`<h2>ייבוא אנשי קשר</h2><p class="muted">מדביקים כתובות בכל צורה: אחת בכל שורה, מופרדות בפסיקים או ברווחים, עמודה מאקסל, או רשימה ממייל (<span class="ltr">שם &lt;mail@example.com&gt;</span>). אפשר גם לבחור קובץ CSV עם עמודת מייל ועמודת שם. כפילויות מוסרות לבד.</p>
+        <label>הדבקת כתובות<textarea id="paste" rows="8" class="ltr" placeholder="dana@example.com&#10;yossi@example.com, rina@example.com&#10;משה כהן &lt;moshe@example.com&gt;"></textarea></label>
+        <div class="row" style="justify-content:space-between;margin:-4px 0 12px"><b id="found" class="role-hint">עוד לא הודבקו כתובות</b><label style="margin:0" class="role-hint">או קובץ: <input type="file" id="file" accept=".csv,.txt" style="width:auto;display:inline"></label></div>
         <label>לרשימה<select id="list"><option value="">בלי רשימה</option>${ls.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></label>
         <label>מאיפה הגיעה ההסכמה של הנמענים?<input id="src" placeholder="למשל: טופס הרשמה באתר" required></label>
         <label><input type="checkbox" id="decl"> אני מאשר/ת שכל הנמענים בקובץ הסכימו לקבל ממני דיוור, כנדרש בחוק</label>
         <p class="error" id="err"></p><div class="row"><button class="primary" id="go">ייבוא</button><button data-close>ביטול</button></div>`);
-      $('#file').onchange = async (e) => { $('#paste').value = await e.target.files[0].text(); };
+      const count = () => {
+        const n = parseCsv($('#paste').value).length;
+        $('#found').textContent = n ? `נמצאו ${n.toLocaleString('he-IL')} כתובות שונות` : 'עוד לא נמצאו כתובות';
+        $('#go').textContent = n ? `ייבוא ${n.toLocaleString('he-IL')} כתובות` : 'ייבוא';
+      };
+      $('#paste').oninput = count;
+      $('#file').onchange = async (e) => { $('#paste').value = await e.target.files[0].text(); count(); };
       $('#go').onclick = async () => {
         const rows = parseCsv($('#paste').value);
         if (!rows.length) return ($('#err').textContent = 'לא נמצאו כתובות מייל');
+        if (!$('#src').value.trim()) return ($('#err').textContent = 'צריך לציין מאיפה הגיעה ההסכמה');
+        if (!$('#decl').checked) return ($('#err').textContent = 'צריך לאשר שהנמענים הסכימו לקבל דיוור');
+        const go = $('#go');
+        go.disabled = true;
+        $('#err').textContent = '';
+        // The API takes up to 10,000 per request: big pastes go in batches
+        const BATCH = 5000;
+        let done = 0;
         try {
-          const r = await api('POST', '/v1/contacts/import', { contacts: rows, list_ids: $('#list').value ? [$('#list').value] : [], consent_source: $('#src').value, consent_declared: $('#decl').checked });
-          closeModal(); toast(`יובאו ${r.imported} אנשי קשר`); contacts();
-        } catch (err) { $('#err').textContent = err.message; }
+          for (let i = 0; i < rows.length; i += BATCH) {
+            go.textContent = `מייבא… ${done.toLocaleString('he-IL')} מתוך ${rows.length.toLocaleString('he-IL')}`;
+            const r = await api('POST', '/v1/contacts/import', { contacts: rows.slice(i, i + BATCH), list_ids: $('#list').value ? [$('#list').value] : [], consent_source: $('#src').value, consent_declared: true });
+            done += r.imported;
+          }
+          closeModal(); toast(`יובאו ${done.toLocaleString('he-IL')} אנשי קשר`); contacts();
+        } catch (err) {
+          $('#err').textContent = done ? `יובאו ${done.toLocaleString('he-IL')}, ואז: ${err.message}` : err.message;
+          go.disabled = false; count();
+        }
       };
     };
   }
