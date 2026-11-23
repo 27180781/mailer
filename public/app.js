@@ -673,13 +673,21 @@
         // The API takes up to 10,000 per request: big pastes go in batches
         const BATCH = 5000;
         let done = 0;
+        const skipped = [];
         try {
           for (let i = 0; i < rows.length; i += BATCH) {
             go.textContent = `מייבא… ${done.toLocaleString('he-IL')} מתוך ${rows.length.toLocaleString('he-IL')}`;
             const r = await api('POST', '/v1/contacts/import', { contacts: rows.slice(i, i + BATCH), list_ids: $('#list').value ? [$('#list').value] : [], consent_source: $('#src').value, consent_declared: true });
             done += r.imported;
+            skipped.push(...(r.skipped || []));
           }
-          closeModal(); toast(`יובאו ${done.toLocaleString('he-IL')} אנשי קשר`); contacts();
+          if (skipped.length) {
+            modal(`<h2>הייבוא הסתיים</h2><p>יובאו <b>${done.toLocaleString('he-IL')}</b> אנשי קשר.</p>
+              <p>${skipped.length.toLocaleString('he-IL')} כתובות לא תקינות דולגו:</p>
+              <div class="keybox ltr" style="max-height:180px;overflow:auto;white-space:pre-wrap">${esc(skipped.slice(0, 200).join('\n'))}</div>
+              <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="primary" data-close>סגירה</button></div>`);
+          } else { closeModal(); toast(`יובאו ${done.toLocaleString('he-IL')} אנשי קשר`); }
+          contacts();
         } catch (err) {
           $('#err').textContent = done ? `יובאו ${done.toLocaleString('he-IL')}, ואז: ${err.message}` : err.message;
           go.disabled = false; count();

@@ -751,6 +751,15 @@ test('contacts by email, status and list changes, contact webhooks (Zapier / Mak
   assert.equal(rm.body.removed, true);
   assert.equal((await api('DELETE', '/v1/contacts/zap2@client.test', K)).status, 200);
 
+  // One bad address in an import is skipped, not fatal
+  const mixed = await api('POST', '/v1/contacts/import', K, {
+    contacts: [{ email: 'good1@client.test' }, { email: 'not-an-email' }, { email: 'GOOD1@client.test' }, { email: 'good2@client.test' }],
+    consent_source: 'בדיקת ייבוא', consent_declared: true,
+  });
+  assert.equal(mixed.status, 200);
+  assert.equal(mixed.body.imported, 2);
+  assert.deepEqual(mixed.body.skipped, ['not-an-email']);
+
   // What Make sends for empty fields
   const blankFields = await api('POST', '/v1/contacts', K, { email: 'zap3@client.test', name: '', consent_source: '', list_ids: [''], attributes: {} });
   assert.equal(blankFields.status, 201);

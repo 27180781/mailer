@@ -724,19 +724,31 @@ export async function apiRoutes(app: FastifyInstance) {
     r.post('/v1/contacts/import', async (req) => {
       const b = z
         .object({
-          contacts: z.array(contactBody.omit({ list_ids: true, consent_source: true })).min(1).max(10_000),
+          // Each email is checked below, so one bad address skips that row instead of failing the whole import
+          contacts: z.array(contactBody.omit({ list_ids: true, consent_source: true }).extend({ email: z.string().max(320) })).min(1).max(10_000),
           list_ids: z.array(uuid).default([]),
           consent_source: z.string().min(3, 'צריך לציין מאיפה הגיעה הסכמת הנמענים'),
           consent_declared: z.literal(true, { errorMap: () => ({ message: 'צריך לאשר שכל הנמענים הסכימו לקבל דיוור' }) }),
         })
         .parse(req.body);
       const accountId = req.auth.account.id;
+      const valid: (typeof b.contacts)[number][] = [];
+      const skipped: string[] = [];
+      const seen = new Set<string>();
+      for (const c of b.contacts) {
+        const e = email.safeParse(c.email);
+        if (!e.success) { skipped.push(c.email); continue; }
+        if (seen.has(e.data)) continue;
+        seen.add(e.data);
+        valid.push({ ...c, email: e.data });
+      }
+      if (!valid.length) throw new ApiError(400, 'no_valid_emails', 'לא נמצאו כתובות מייל תקינות');
       // Bulk imports don't fire contact.* webhooks (thousands of calls to Zapier/Make)
       const count = await tx(async (client) => {
-        for (const c of b.contacts) await upsertContact(accountId, { ...c, list_ids: b.list_ids, consent_source: b.consent_source }, req.ip, client);
-        return b.contacts.length;
+        for (const c of valid) await upsertContact(accountId, { ...c, list_ids: b.list_ids, consent_source: b.consent_source }, req.ip, client);
+        return valid.length;
       });
-      return { imported: count };
+      return { imported: count, skipped_count: skipped.length, skipped: skipped.slice(0, 50) };
     });
     const contactRef = z.object({ id: z.string().min(1).max(320) });
     r.get('/v1/contacts/:id', async (req) => {
