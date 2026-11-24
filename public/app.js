@@ -935,7 +935,7 @@
         ${c.status === 'paused' ? '<button class="primary" id="resume">המשך שליחה</button>' : ''}
         ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
         ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
-        <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}
+        <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${c.is_advertisement && !/^\s*פרסומת/.test(c.subject) ? '<span class="badge warn" title="המילה «פרסומת» תתווסף בתחילת הנושא. מבטלים בעריכת הדיוור">פרסומת:</span> ' : ''}${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}
           ${(c.inforu_groups || []).length ? ` · <b>קבוצות InforU:</b> ${c.inforu_groups.map((g) => `${esc(g.name)} (${Number(g.recipients).toLocaleString('he-IL')})`).join(', ')}${c.inforu_groups_sent_at ? ` <span class="badge good">נשלח ${fmtDate(c.inforu_groups_sent_at)}</span>` : ''}` : ''}</p>
         ${s.total ? `<div class="grid">
           ${statCard('all', s.sent.toLocaleString('he-IL'), `נשלחו${s.queued ? ` · ${s.queued} בתור` : ''}`)}
