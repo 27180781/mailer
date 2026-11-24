@@ -47,7 +47,8 @@ export async function inforuCall(creds: InforuCredentials, fn: string, data: Rec
     throw new Error(`InforU החזיר תשובה שאינה JSON (HTTP ${res.status}): ${raw.slice(0, 200)}`);
   }
   if (json.StatusId !== 1) throw new InforuError(Number(json.StatusId), json.StatusDescription ?? '', json.DetailedDescription ?? '');
-  return { data: json.Data, requestId: String(json.RequestId ?? '') };
+  // Umail/Message/Send answers with CampaignId and token at the top level, other functions inside Data
+  return { data: json.Data, requestId: String(json.RequestId ?? ''), raw: json };
 }
 
 /** Checks the credentials (lists the contact groups, which sends nothing) */
@@ -85,7 +86,7 @@ export interface InforuSend {
 }
 
 export async function inforuSend(creds: InforuCredentials, s: InforuSend) {
-  return inforuCall(
+  const r = await inforuCall(
     creds,
     'Umail/Message/Send',
     compact({
@@ -101,4 +102,37 @@ export async function inforuSend(creds: InforuCredentials, s: InforuSend) {
       IncludeContacts: s.contacts.map((c) => compact({ Email: c.email, FirstName: c.firstName, LastName: c.lastName })),
     }),
   );
+  const campaignId = Number(r.raw.CampaignId ?? r.data?.CampaignId ?? 0) || null;
+  return { campaignId, token: String(r.raw.token ?? r.data?.token ?? ''), requestId: r.requestId };
+}
+
+export interface InforuCampaignStats { id: number; status: string; sent: number; opened: number; clicks: number; returned: number; blocked: number }
+/** Totals per InforU campaign (Umail/Campaign/List) */
+export async function inforuCampaignStats(creds: InforuCredentials, ids: number[]): Promise<InforuCampaignStats[]> {
+  if (!ids.length) return [];
+  const { data } = await inforuCall(creds, 'Umail/Campaign/List', { CampaignIds: ids.map(String) });
+  return (data?.List ?? []).map((c: any) => ({
+    id: Number(c.id), status: String(c.status ?? ''), sent: Number(c.sent) || 0, opened: Number(c.opened) || 0,
+    clicks: Number(c.clicks) || 0, returned: Number(c.returned) || 0, blocked: Number(c.blocked) || 0,
+  }));
+}
+
+export interface InforuMailEvent { Datetime: string; CampaignId: number; Email: string; Action: string; Value?: string; MoreInfo?: string; AdditionalInformation?: string }
+/** Per-recipient events (delivery, open, click, return, unsubscribe). Pulled items leave InforU's queue. Needs InforU to enable it. */
+export async function inforuMailNotifications(creds: InforuCredentials, batchSize = 500): Promise<InforuMailEvent[]> {
+  const { data } = await inforuCall(creds, 'Umail/GetMailNotification', { BatchSize: String(batchSize) });
+  return data?.List ?? [];
+}
+
+/** Email addresses that unsubscribed in InforU, from LastFetchedId on */
+export async function inforuUnsubscribes(creds: InforuCredentials, fromDate: string, toDate: string, lastFetchedId: number | null) {
+  const { data } = await inforuCall(creds, 'Contact/GetUnsubscribeList', { FromDate: fromDate, ToDate: toDate, Type: 'Email', LastFetchedId: lastFetchedId ?? 0 });
+  return { lastFetchedId: Number(data?.LastFetchedId ?? lastFetchedId ?? 0) || null, list: (data?.List ?? []) as { Value: string; UnsubscribeDatetime: string }[] };
+}
+
+/** Remaining email packages (Newsletters) at customer level */
+export async function inforuEmailQuota(creds: InforuCredentials): Promise<{ remaining: number; warning: number } | null> {
+  const { data } = await inforuCall(creds, 'Admin/GetQuota', { QuotaUsageType: '' });
+  const q = (data?.List ?? []).find((x: any) => /newsletter|email|mail/i.test(String(x.QuotaUsageType)));
+  return q ? { remaining: Number(q.RemainingQuota) || 0, warning: Number(q.WarningLevel) || 0 } : null;
 }

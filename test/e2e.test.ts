@@ -895,8 +895,15 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     calls.push({ fn, auth: init.headers.Authorization, data: JSON.parse(init.body).Data });
     if (mode === 'badauth') return new Response(JSON.stringify({ StatusId: -2, StatusDescription: 'Authentication failed' }));
     if (fn === 'Contact/GetGroupList') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ GroupId: 11, GroupNumber: 3, GroupName: 'לקוחות ותיקים', CountNonBlockedContactsInfoMail: 1200 }, { GroupId: 12, GroupNumber: 4, GroupName: 'מתעניינים', CountActiveContactsMail: 300 }] } }));
+    if (fn === 'Umail/Message/Send') return new Response(JSON.stringify({ StatusId: 1, StatusDescription: 'Success', CampaignId: 5000 + calls.length, Recipients: 0, token: 'tok' }));
+    if (fn === 'Umail/Campaign/List') return new Response(JSON.stringify({ StatusId: 1, Data: { List: JSON.parse(init.body).Data.CampaignIds.map((id: string) => ({ id: Number(id), status: 'completed', sent: 10, opened: 4, clicks: 1, returned: '1', blocked: '0' })) } }));
+    if (fn === 'Umail/GetMailNotification') { const l = notifications; notifications = []; return new Response(JSON.stringify({ StatusId: 1, Data: { List: l } })); }
+    if (fn === 'Contact/GetUnsubscribeList') return new Response(JSON.stringify({ StatusId: 1, Data: { LastFetchedId: 77, Count: 1, List: unsubList.splice(0) } }));
+    if (fn === 'Admin/GetQuota') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ QuotaUsageType: 'SMS', RemainingQuota: 5 }, { QuotaUsageType: 'Newsletters', QuotaType: 'Packages', RemainingQuota: 8400, WarningLevel: 500 }] } }));
     return new Response(JSON.stringify({ StatusId: 1, RequestId: `req-${calls.length}`, Data: {} }));
   }) as any;
+  let notifications: any[] = [];
+  const unsubList: any[] = [];
   try {
     const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
     const K = u.body.token;
@@ -959,7 +966,30 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     assert.ok(!calls.some((c) => JSON.stringify(c.data).includes('iu4@client.test')), 'suppressed address not sent');
     const msgs = await query(`SELECT to_email, status, provider, provider_message_id FROM messages WHERE campaign_id = $1 ORDER BY to_email`, [camp.body.id]);
     assert.deepEqual(msgs.map((m: any) => m.status), ['sent', 'sent', 'sent']);
-    assert.ok(msgs.every((m: any) => m.provider === 'inforu' && m.provider_message_id?.startsWith('req-')));
+    assert.ok(msgs.every((m: any) => m.provider === 'inforu' && /^inforu:\d+$/.test(m.provider_message_id)), 'InforU CampaignId stored');
+    const ids = (await one(`SELECT inforu_campaign_ids FROM campaigns WHERE id = $1`, [camp.body.id])).inforu_campaign_ids;
+    assert.equal(ids.length, 2);
+
+    // Reports back from InforU: totals, per-recipient events, quota
+    const danaMsg = await one(`SELECT provider_message_id FROM messages WHERE campaign_id = $1 AND to_email = 'iu2@client.test'`, [camp.body.id]);
+    const iuCampaign = Number(danaMsg.provider_message_id.split(':')[1]);
+    notifications = [
+      { Datetime: '2026-11-24 10:00:00', CampaignId: iuCampaign, Email: 'IU2@client.test', Action: 'dsn', Value: '2.0.0', MoreInfo: 'sent' },
+      { Datetime: '2026-11-24 10:05:00', CampaignId: iuCampaign, Email: 'iu2@client.test', Action: 'open', Value: 'mobile' },
+      { Datetime: '2026-11-24 10:06:00', CampaignId: iuCampaign, Email: 'iu2@client.test', Action: 'click', Value: 'https://example.com/x' },
+      { Datetime: '2026-11-24 10:07:00', CampaignId: 999999, Email: 'stranger@client.test', Action: 'open', Value: 'desktop' },
+    ];
+    const synced = await api('POST', `/v1/campaigns/${camp.body.id}/inforu-sync`, K);
+    assert.equal(synced.status, 200, JSON.stringify(synced.body));
+    assert.deepEqual([synced.body.inforu_stats.sent, synced.body.inforu_stats.opened, synced.body.inforu_stats.returned, synced.body.inforu_stats.campaigns], [20, 8, 2, 2]);
+    const r2 = await api('GET', `/v1/campaigns/${camp.body.id}/recipients?filter=clicked`, K);
+    assert.deepEqual(r2.body.items.map((x: any) => [x.email, x.status, x.clicks]), [['iu2@client.test', 'delivered', 1]]);
+    assert.equal((await api('GET', '/v1/account/inforu', K)).body.email_quota.remaining, 8400);
+    // Unsubscribes through InforU's link reach our list
+    unsubList.push({ Type: 'Email', Value: 'IU3@client.test', UnsubscribeDatetime: '2026-11-24 11:00:00' });
+    const { syncInforuUnsubscribes } = await import('../src/services/inforuCampaigns.js');
+    assert.equal(await syncInforuUnsubscribes(await one(`SELECT * FROM accounts WHERE id = $1`, [me.body.account.id])), 1);
+    assert.equal((await one(`SELECT status FROM contacts WHERE email = 'iu3@client.test'`)).status, 'unsubscribed');
     // Doesn't use up the SES daily cap
     const { remainingDailyCap } = await import('../src/worker.js');
     void remainingDailyCap;

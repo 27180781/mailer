@@ -7,8 +7,8 @@ import { ApiError, notFound } from '../errors.js';
 import { authenticate, authorize, createApiKey, createSession, memberships, requirePlatform, requireSuperAdmin, type Role } from '../auth.js';
 import { sendSystemEmail } from '../services/systemEmail.js';
 import { inforuTestSend } from '../services/inforuCampaigns.js';
-import { inforuGroups, inforuVerify } from '../providers/inforu.js';
-import { inforuCredentials } from '../services/inforuCampaigns.js';
+import { inforuEmailQuota, inforuGroups, inforuVerify } from '../providers/inforu.js';
+import { applyInforuNotifications, inforuCredentials, syncInforuCampaignStats } from '../services/inforuCampaigns.js';
 import { encryptSecret } from '../crypto.js';
 import { escapeHtml } from '../services/render.js';
 import { addDomain, checkDomain, deleteDomain, publicDomain, zoneFile } from '../services/domains.js';
@@ -408,10 +408,12 @@ export async function apiRoutes(app: FastifyInstance) {
     });
 
     // ---------- InforUMobile (optional channel for campaigns) ----------
-    r.get('/v1/account/inforu', async (req) => ({
-      connected: !!(req.auth.account.inforu_username && req.auth.account.inforu_token_enc),
-      username: req.auth.account.inforu_username ?? null,
-    }));
+    r.get('/v1/account/inforu', async (req) => {
+      const creds = (() => { try { return inforuCredentials(req.auth.account); } catch { return null; } })();
+      let quota = null;
+      if (creds) quota = await inforuEmailQuota(creds).catch(() => null);
+      return { connected: !!creds, username: req.auth.account.inforu_username ?? null, email_quota: quota };
+    });
     /** Saves the InforU API login after checking it with InforU. The token is stored encrypted and never returned. */
     r.put('/v1/account/inforu', async (req) => {
       const b = z.object({ username: z.string().trim().min(1, 'צריך שם משתמש').max(200), token: z.string().trim().min(8, 'צריך טוקן API').max(500) }).parse(req.body);
@@ -1118,6 +1120,19 @@ export async function apiRoutes(app: FastifyInstance) {
       if (['sent', 'cancelled'].includes(c.status)) throw new ApiError(409, 'invalid_state', 'הדיוור כבר הסתיים');
       await query(`UPDATE messages SET status = 'failed', last_error = 'campaign_cancelled' WHERE campaign_id = $1 AND status = 'queued'`, [id]);
       await query(`UPDATE campaigns SET status = 'cancelled', finished_at = now(), updated_at = now() WHERE id = $1`, [id]);
+      return campaignView(id);
+    });
+    /** Pulls the latest numbers of an InforU campaign right now (the worker also does it every few minutes) */
+    r.post('/v1/campaigns/:id/inforu-sync', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      if (c.channel !== 'inforu') throw new ApiError(400, 'not_inforu', 'הדיוור לא נשלח דרך InforU');
+      try {
+        await applyInforuNotifications(req.auth.account, 3);
+        await syncInforuCampaignStats(c, req.auth.account);
+      } catch (err: any) {
+        throw new ApiError(502, 'inforu_error', String(err?.message ?? err));
+      }
       return campaignView(id);
     });
     r.get('/v1/campaigns/:id/stats', async (req) => {

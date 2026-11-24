@@ -1,9 +1,10 @@
 import { config } from '../config.js';
 import { one, query } from '../db.js';
 import { decryptSecret, signToken } from '../crypto.js';
-import { INFORU_BATCH, InforuError, inforuSend, type InforuCredentials } from '../providers/inforu.js';
+import { INFORU_BATCH, InforuError, inforuCampaignStats, inforuMailNotifications, inforuSend, inforuUnsubscribes, type InforuCredentials } from '../providers/inforu.js';
+import { recordEngagement } from './events.js';
 import { advertisingSubject, escapeHtml, personalize } from './render.js';
-import { suppressionReason } from './suppression.js';
+import { suppress, suppressionReason, unsubscribeContact } from './suppression.js';
 import { emitEvent } from './webhooks.js';
 
 /** The account's InforU login, or null when it has not connected InforU */
@@ -55,7 +56,7 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
       if (claimedGroups) {
         const r = render(campaign, account, null, '');
         try {
-          const { requestId } = await inforuSend(creds, {
+          const { campaignId: iuId } = await inforuSend(creds, {
             campaignName: campaign.name,
             campaignRefId: `${campaign.id}:groups`,
             fromAddress: campaign.from_email,
@@ -67,7 +68,10 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
             groupIds: groups.map((g) => g.id),
             allowDuplicates: false,
           });
-          await query('UPDATE campaigns SET inforu_groups_request_id = $2 WHERE id = $1', [campaign.id, requestId || null]);
+          await query(
+            `UPDATE campaigns SET inforu_groups_request_id = $2::text, inforu_campaign_ids = CASE WHEN $3::bigint IS NULL THEN inforu_campaign_ids ELSE array_append(inforu_campaign_ids, $3::bigint) END WHERE id = $1`,
+            [campaign.id, iuId ? String(iuId) : null, iuId ? String(iuId) : null],
+          );
           handed += groups.reduce((n, g) => n + (g.recipients || 0), 0);
         } catch (err: any) {
           await query('UPDATE campaigns SET inforu_groups_sent_at = NULL WHERE id = $1', [campaign.id]);
@@ -112,7 +116,7 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
         const ids = batch.map((m: any) => m.id);
         part++;
         try {
-          const { requestId } = await inforuSend(creds, {
+          const { campaignId: iuId, requestId } = await inforuSend(creds, {
             campaignName: campaign.name,
             campaignRefId: `${campaign.id}:${ids[0]}`,
             fromAddress: campaign.from_email,
@@ -125,8 +129,9 @@ export async function processInforuCampaigns(limitPerCampaign = 5000) {
           });
           await query(
             `UPDATE messages SET status = 'sent', provider = 'inforu', provider_message_id = $2, sent_at = now(), last_error = NULL WHERE id = ANY($1)`,
-            [ids, requestId || null],
+            [ids, iuId ? `inforu:${iuId}` : requestId || null],
           );
+          if (iuId) await query(`UPDATE campaigns SET inforu_campaign_ids = array_append(inforu_campaign_ids, $2::bigint) WHERE id = $1`, [campaign.id, String(iuId)]);
           handed += batch.length;
           for (const m of batch)
             await emitEvent(campaign.account_id, 'email.sent', { message_id: m.id, to: m.to_email, campaign_id: campaign.id, provider: 'inforu' });
@@ -171,4 +176,110 @@ export async function inforuTestSend(campaign: any, account: any, to: string[]) 
     contacts: to.map((email) => ({ email })),
     allowDuplicates: true,
   });
+}
+
+// ---------- Reports back from InforU ----------
+
+/** Totals of a campaign: the sum over the InforU campaigns it was sent as (batches and group calls) */
+export async function syncInforuCampaignStats(campaign: any, account: any) {
+  const creds = inforuCredentials(account);
+  const ids: number[] = (campaign.inforu_campaign_ids ?? []).map(Number);
+  if (!creds || !ids.length) return null;
+  const rows = await inforuCampaignStats(creds, ids);
+  const sum = rows.reduce(
+    (t, r) => ({ sent: t.sent + r.sent, opened: t.opened + r.opened, clicks: t.clicks + r.clicks, returned: t.returned + r.returned, blocked: t.blocked + r.blocked }),
+    { sent: 0, opened: 0, clicks: 0, returned: 0, blocked: 0 },
+  );
+  const stats = { ...sum, campaigns: rows.length, statuses: [...new Set(rows.map((r) => r.status))] };
+  await query('UPDATE campaigns SET inforu_stats = $2, inforu_stats_at = now() WHERE id = $1', [campaign.id, JSON.stringify(stats)]);
+  return stats;
+}
+
+/**
+ * Pulls per-recipient events and applies them to our messages (when InforU has the notification queue enabled
+ * for the account). Events of group sends or of campaigns sent elsewhere have no message here and are skipped.
+ */
+export async function applyInforuNotifications(account: any, maxBatches = 10) {
+  const creds = inforuCredentials(account);
+  if (!creds) return 0;
+  let applied = 0;
+  for (let b = 0; b < maxBatches; b++) {
+    const events = await inforuMailNotifications(creds, 500);
+    if (!events.length) break;
+    for (const ev of events) {
+      const email = String(ev.Email ?? '').toLowerCase();
+      const msg = await one(
+        `SELECT * FROM messages WHERE account_id = $1 AND provider = 'inforu' AND provider_message_id = $2 AND to_email = $3 LIMIT 1`,
+        [account.id, `inforu:${ev.CampaignId}`, email],
+      );
+      if (!msg) continue;
+      const action = String(ev.Action ?? '').toLowerCase();
+      const data = { via: 'inforu', value: ev.Value ?? null, info: ev.MoreInfo ?? null, at: ev.Datetime };
+      if (action === 'open') await recordEngagement(msg.id, 'opened', data);
+      else if (action === 'click') await recordEngagement(msg.id, 'clicked', { ...data, url: ev.Value ?? null });
+      else if (action === 'dsn' || action === 'return') {
+        const code = String(ev.Value ?? '');
+        const hard = action === 'return' || code.startsWith('5');
+        if (code.startsWith('2') && !hard) {
+          await query(`UPDATE messages SET status = 'delivered' WHERE id = $1 AND status = 'sent'`, [msg.id]);
+          await query('INSERT INTO events (account_id, message_id, type, data) VALUES ($1, $2, $3, $4)', [account.id, msg.id, 'delivered', JSON.stringify(data)]);
+        } else if (hard) {
+          await query(`UPDATE messages SET status = 'bounced', last_error = $2 WHERE id = $1 AND status IN ('sent','delivered')`, [msg.id, String(ev.AdditionalInformation ?? code).slice(0, 500)]);
+          await query('INSERT INTO events (account_id, message_id, type, data) VALUES ($1, $2, $3, $4)', [account.id, msg.id, 'bounced', JSON.stringify(data)]);
+          await suppress(account.id, email, 'bounce');
+          await query(`UPDATE contacts SET status = 'bounced', updated_at = now() WHERE account_id = $1 AND email = $2 AND status = 'active'`, [account.id, email]);
+        } else continue; // 4.x.x: deferred, InforU keeps trying
+      } else if (action === 'unsubscribe') {
+        await unsubscribeContact(account.id, email);
+        await query('INSERT INTO events (account_id, message_id, type, data) VALUES ($1, $2, $3, $4)', [account.id, msg.id, 'unsubscribed', JSON.stringify(data)]);
+      } else continue;
+      applied++;
+    }
+    if (events.length < 500) break;
+  }
+  return applied;
+}
+
+const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '/');
+
+/** People who unsubscribed through InforU's link stop getting this account's marketing from here too */
+export async function syncInforuUnsubscribes(account: any) {
+  const creds = inforuCredentials(account);
+  if (!creds) return 0;
+  const from = account.inforu_unsub_synced_at ? new Date(new Date(account.inforu_unsub_synced_at).getTime() - 86_400_000) : new Date(Date.now() - 90 * 86_400_000);
+  let last: number | null = account.inforu_unsub_last_id ?? null;
+  let n = 0;
+  for (let i = 0; i < 20; i++) {
+    const r = await inforuUnsubscribes(creds, ymd(from), ymd(new Date()), last);
+    for (const u of r.list) {
+      const email = String(u.Value ?? '').trim().toLowerCase();
+      if (!email.includes('@')) continue;
+      await unsubscribeContact(account.id, email);
+      n++;
+    }
+    if (!r.list.length || r.lastFetchedId === last) break;
+    last = r.lastFetchedId;
+  }
+  await query('UPDATE accounts SET inforu_unsub_last_id = $2, inforu_unsub_synced_at = now() WHERE id = $1', [account.id, last]);
+  return n;
+}
+
+/** Worker job: refresh totals of recent InforU campaigns, apply events, sync unsubscribes */
+export async function syncInforuReports() {
+  const accounts = await query(`SELECT * FROM accounts WHERE inforu_username IS NOT NULL AND inforu_token_enc IS NOT NULL`);
+  for (const account of accounts) {
+    try {
+      await applyInforuNotifications(account);
+      const campaigns = await query(
+        `SELECT * FROM campaigns WHERE account_id = $1 AND channel = 'inforu' AND cardinality(inforu_campaign_ids) > 0
+           AND started_at > now() - interval '30 days' AND (inforu_stats_at IS NULL OR inforu_stats_at < now() - interval '10 minutes')
+         ORDER BY inforu_stats_at NULLS FIRST LIMIT 20`,
+        [account.id],
+      );
+      for (const c of campaigns) await syncInforuCampaignStats(c, account);
+      if (!account.inforu_unsub_synced_at || Date.now() - new Date(account.inforu_unsub_synced_at).getTime() > 3_600_000) await syncInforuUnsubscribes(account);
+    } catch (err) {
+      console.error(`inforu report sync failed for account ${account.id}`, String((err as any)?.message ?? err));
+    }
+  }
 }
