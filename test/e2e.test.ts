@@ -954,7 +954,7 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     assert.equal(dana.data.Subject, 'פרסומת: שלום דנה');
     assert.equal(dana.data.FromAddress, 'news@inforu-only.test');
     assert.match(dana.data.Body, /שלום דנה/);
-    assert.doesNotMatch(dana.data.Body, /להסרה|\/u\//, 'no second unsubscribe line: InforU adds its own footer');
+    assert.equal(dana.data.Body, '<p>שלום דנה</p>', 'no footer from us: InforU adds its own');
     assert.doesNotMatch(dana.data.Body, /\/t\/o\//, 'no tracking pixel: InforU tracks');
     assert.ok(!calls.some((c) => JSON.stringify(c.data).includes('iu4@client.test')), 'suppressed address not sent');
     const msgs = await query(`SELECT to_email, status, provider, provider_message_id FROM messages WHERE campaign_id = $1 ORDER BY to_email`, [camp.body.id]);
