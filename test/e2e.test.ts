@@ -896,7 +896,11 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     if (mode === 'badauth') return new Response(JSON.stringify({ StatusId: -2, StatusDescription: 'Authentication failed' }));
     if (fn === 'Contact/GetGroupList') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ GroupId: 11, GroupNumber: 3, GroupName: 'לקוחות ותיקים', CountNonBlockedContactsInfoMail: 1200 }, { GroupId: 12, GroupNumber: 4, GroupName: 'מתעניינים', CountActiveContactsMail: 300 }] } }));
     if (fn === 'Umail/Message/Send') return new Response(JSON.stringify({ StatusId: 1, StatusDescription: 'Success', CampaignId: 5000 + calls.length, Recipients: 0, token: 'tok' }));
-    if (fn === 'Umail/Campaign/List') return new Response(JSON.stringify({ StatusId: 1, Data: { List: JSON.parse(init.body).Data.CampaignIds.map((id: string) => ({ id: Number(id), status: 'completed', sent: 10, opened: 4, clicks: 1, returned: '1', blocked: '0' })) } }));
+    if (fn === 'Umail/Campaign/List') {
+      const d = JSON.parse(init.body).Data;
+      const ids = d.CampaignIds ?? [8001, 8002];
+      return new Response(JSON.stringify({ StatusId: 1, Data: { List: ids.map((id: string | number) => ({ id: Number(id), name: Number(id) === 8001 ? 'ישן' : 'אחר', status: 'completed', sent: 10, opened: 4, clicks: 1, returned: '1', blocked: '0' })) } }));
+    }
     if (fn === 'Umail/GetMailNotification') { const l = notifications; notifications = []; return new Response(JSON.stringify({ StatusId: 1, Data: { List: l } })); }
     if (fn === 'Contact/GetUnsubscribeList') return new Response(JSON.stringify({ StatusId: 1, Data: { LastFetchedId: 77, Count: 1, List: unsubList.splice(0) } }));
     if (fn === 'Admin/GetQuota') return new Response(JSON.stringify({ StatusId: 1, Data: { List: [{ QuotaUsageType: 'SMS', RemainingQuota: 5 }, { QuotaUsageType: 'Newsletters', QuotaType: 'Packages', RemainingQuota: 8400, WarningLevel: 500 }] } }));
@@ -985,6 +989,12 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     const r2 = await api('GET', `/v1/campaigns/${camp.body.id}/recipients?filter=clicked`, K);
     assert.deepEqual(r2.body.items.map((x: any) => [x.email, x.status, x.clicks]), [['iu2@client.test', 'delivered', 1]]);
     assert.equal((await api('GET', '/v1/account/inforu', K)).body.email_quota.remaining, 8400);
+    // A campaign sent before ids were stored is found in InforU by name and date
+    const old = await one(`INSERT INTO campaigns (account_id, name, subject, from_name, from_email, channel, status, started_at) VALUES ($1, 'ישן', 's', 'f', 'a@b.test', 'inforu', 'sent', now() - interval '1 day') RETURNING *`, [me.body.account.id]);
+    const oldSync = await api('POST', `/v1/campaigns/${old.id}/inforu-sync`, K);
+    assert.deepEqual(oldSync.body.inforu_campaign_ids.map(Number), [8001]);
+    assert.equal(oldSync.body.inforu_stats.sent, 10);
+
     // Unsubscribes through InforU's link reach our list
     unsubList.push({ Type: 'Email', Value: 'IU3@client.test', UnsubscribeDatetime: '2026-11-24 11:00:00' });
     const { syncInforuUnsubscribes } = await import('../src/services/inforuCampaigns.js');

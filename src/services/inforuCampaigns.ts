@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { one, query } from '../db.js';
 import { decryptSecret, signToken } from '../crypto.js';
-import { INFORU_BATCH, InforuError, inforuCampaignStats, inforuMailNotifications, inforuSend, inforuUnsubscribes, type InforuCredentials } from '../providers/inforu.js';
+import { INFORU_BATCH, InforuError, inforuCampaignStats, inforuCampaignsBetween, inforuMailNotifications, inforuSend, inforuUnsubscribes, type InforuCredentials } from '../providers/inforu.js';
 import { recordEngagement } from './events.js';
 import { advertisingSubject, escapeHtml, personalize } from './render.js';
 import { suppress, suppressionReason, unsubscribeContact } from './suppression.js';
@@ -183,14 +183,27 @@ export async function inforuTestSend(campaign: any, account: any, to: string[]) 
 /** Totals of a campaign: the sum over the InforU campaigns it was sent as (batches and group calls) */
 export async function syncInforuCampaignStats(campaign: any, account: any) {
   const creds = inforuCredentials(account);
-  const ids: number[] = (campaign.inforu_campaign_ids ?? []).map(Number);
-  if (!creds || !ids.length) return null;
+  if (!creds) return null;
+  let ids: number[] = (campaign.inforu_campaign_ids ?? []).map(Number);
+  // Sent before the ids were stored: find it in InforU by name and send date
+  if (!ids.length && campaign.started_at) {
+    const day = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(d);
+    const start = new Date(campaign.started_at);
+    const found = await inforuCampaignsBetween(creds, day(start), day(new Date(start.getTime() + 86_400_000)));
+    ids = found.filter((c) => c.name.trim() === String(campaign.name).trim()).map((c) => c.id);
+    if (!ids.length) return null;
+    await query('UPDATE campaigns SET inforu_campaign_ids = $2::bigint[] WHERE id = $1', [campaign.id, ids.map(String)]);
+  }
+  if (!ids.length) return null;
   const rows = await inforuCampaignStats(creds, ids);
   const sum = rows.reduce(
     (t, r) => ({ sent: t.sent + r.sent, opened: t.opened + r.opened, clicks: t.clicks + r.clicks, returned: t.returned + r.returned, blocked: t.blocked + r.blocked }),
     { sent: 0, opened: 0, clicks: 0, returned: 0, blocked: 0 },
   );
-  const stats = { ...sum, campaigns: rows.length, statuses: [...new Set(rows.map((r) => r.status))] };
+  // Unsubscribes through InforU's link since the campaign went out (InforU reports them per account, not per campaign)
+  let unsubscribed: number | null = null;
+  try { unsubscribed = await inforuUnsubscribesSince(creds, new Date(campaign.started_at)); } catch {}
+  const stats = { ...sum, unsubscribed, campaigns: rows.length, statuses: [...new Set(rows.map((r) => r.status))] };
   await query('UPDATE campaigns SET inforu_stats = $2, inforu_stats_at = now() WHERE id = $1', [campaign.id, JSON.stringify(stats)]);
   return stats;
 }
@@ -241,6 +254,22 @@ export async function applyInforuNotifications(account: any, maxBatches = 10) {
 }
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '/');
+/** Israel local time "YYYY-MM-DD HH:mm:ss", the format InforU uses */
+const israelStamp = (d: Date) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Jerusalem', dateStyle: 'short', timeStyle: 'medium' }).format(d);
+
+/** Email unsubscribes in the InforU account from a moment on */
+async function inforuUnsubscribesSince(creds: InforuCredentials, since: Date) {
+  const from = israelStamp(since);
+  let last: number | null = 0;
+  let n = 0;
+  for (let i = 0; i < 50; i++) {
+    const r = await inforuUnsubscribes(creds, ymd(since), ymd(new Date()), last);
+    n += r.list.filter((u) => String(u.UnsubscribeDatetime ?? '') >= from).length;
+    if (!r.list.length || r.lastFetchedId === last) break;
+    last = r.lastFetchedId;
+  }
+  return n;
+}
 
 /** People who unsubscribed through InforU's link stop getting this account's marketing from here too */
 export async function syncInforuUnsubscribes(account: any) {
@@ -271,7 +300,7 @@ export async function syncInforuReports() {
     try {
       await applyInforuNotifications(account);
       const campaigns = await query(
-        `SELECT * FROM campaigns WHERE account_id = $1 AND channel = 'inforu' AND cardinality(inforu_campaign_ids) > 0
+        `SELECT * FROM campaigns WHERE account_id = $1 AND channel = 'inforu' AND (cardinality(inforu_campaign_ids) > 0 OR inforu_groups_sent_at IS NOT NULL OR status = 'sent')
            AND started_at > now() - interval '30 days' AND (inforu_stats_at IS NULL OR inforu_stats_at < now() - interval '10 minutes')
          ORDER BY inforu_stats_at NULLS FIRST LIMIT 20`,
         [account.id],

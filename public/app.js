@@ -850,11 +850,10 @@
   /** Numbers that InforU reports for the campaign (sum over its batches and group sends) */
   function inforuStatsBlock(c) {
     const st = c.inforu_stats;
-    const sentToIu = (c.inforu_campaign_ids || []).length;
-    if (!sentToIu) return '';
+    if (!['sending', 'sent', 'paused'].includes(c.status)) return '';
     const head = `<div class="row between" style="margin:18px 0 10px"><h2 style="margin:0">נתונים מ-InforU</h2>
       <div class="row"><span class="role-hint">${c.inforu_stats_at ? `עודכן ${fmtDate(c.inforu_stats_at)}` : 'עוד לא עודכן'}</span><button id="iu-sync">עדכון עכשיו</button></div></div>`;
-    if (!st) return head + '<p class="role-hint">הנתונים מתעדכנים מ-InforU כל כמה דקות.</p>';
+    if (!st) return head + '<p class="role-hint">הנתונים מתעדכנים מ-InforU כל כמה דקות. דיוור ישן שנשלח לפני שהנתונים נשמרו מאותר ב-InforU לפי השם והתאריך.</p>';
     const p = (n) => (st.sent ? `${((n / st.sent) * 100).toFixed(1)}%` : '—');
     const card = (n, l) => `<div class="card stat"><div class="n">${n}</div><div class="l">${l}</div></div>`;
     return `${head}<div class="grid">
@@ -863,8 +862,9 @@
       ${card(p(st.clicks), `הקליקו (${st.clicks.toLocaleString('he-IL')})`)}
       ${card(p(st.returned), `חזרו (${st.returned.toLocaleString('he-IL')})`)}
       ${card(st.blocked.toLocaleString('he-IL'), 'חסומים (לא נשלחו)')}
+      ${st.unsubscribed != null ? card(st.unsubscribed.toLocaleString('he-IL'), 'הסרות דרך InforU מאז השליחה') : ''}
     </div>
-    <p class="role-hint" style="margin-top:8px">${st.campaigns > 1 ? `הדיוור נשלח ב-InforU כ-${st.campaigns} קמפיינים, והנתונים הם הסכום שלהם. ` : ''}פירוט לפי נמען (מי פתח ומי הקליק) מגיע כש-InforU מפעילים בחשבון את שמירת החיוויים לדיוור. הסרות דרך הקישור של InforU מתעדכנות כאן כל שעה.</p>`;
+    <p class="role-hint" style="margin-top:8px">${st.campaigns > 1 ? `הדיוור נשלח ב-InforU כ-${st.campaigns} קמפיינים, והנתונים הם הסכום שלהם. ` : ''}פירוט לפי נמען (מי פתח ומי הקליק) מגיע כש-InforU מפעילים בחשבון את שמירת החיוויים לדיוור. מספר ההסרות הוא של כל חשבון ה-InforU מאז השליחה (InforU לא מפרידים לפי דיוור), ומי שהסיר את עצמו נחסם לדיוור גם כאן.</p>`;
   }
   const RFILTERS = { all: 'כולם', delivered: 'נמסרו', sent: 'ממתינים לאישור', opened: 'פתחו', not_opened: 'לא פתחו', clicked: 'הקליקו', unsubscribed: 'הסירו את עצמם', bounced: 'חזרו', complained: 'תלונות', failed: 'לא נשלחו' };
   /** A stat card that filters the recipients list when clicked */

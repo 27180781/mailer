@@ -107,14 +107,20 @@ export async function inforuSend(creds: InforuCredentials, s: InforuSend) {
 }
 
 export interface InforuCampaignStats { id: number; status: string; sent: number; opened: number; clicks: number; returned: number; blocked: number }
+const toStats = (c: any) => ({
+  id: Number(c.id), name: String(c.name ?? ''), created: String(c.created ?? ''), status: String(c.status ?? ''), sent: Number(c.sent) || 0,
+  opened: Number(c.opened) || 0, clicks: Number(c.clicks) || 0, returned: Number(c.returned) || 0, blocked: Number(c.blocked) || 0,
+});
 /** Totals per InforU campaign (Umail/Campaign/List) */
 export async function inforuCampaignStats(creds: InforuCredentials, ids: number[]): Promise<InforuCampaignStats[]> {
   if (!ids.length) return [];
   const { data } = await inforuCall(creds, 'Umail/Campaign/List', { CampaignIds: ids.map(String) });
-  return (data?.List ?? []).map((c: any) => ({
-    id: Number(c.id), status: String(c.status ?? ''), sent: Number(c.sent) || 0, opened: Number(c.opened) || 0,
-    clicks: Number(c.clicks) || 0, returned: Number(c.returned) || 0, blocked: Number(c.blocked) || 0,
-  }));
+  return (data?.List ?? []).map(toStats);
+}
+/** InforU campaigns created between two dates (YYYY-MM-DD), to find ones sent before their id was stored */
+export async function inforuCampaignsBetween(creds: InforuCredentials, startDate: string, endDate: string) {
+  const { data } = await inforuCall(creds, 'Umail/Campaign/List', { StartDate: startDate, EndDate: endDate });
+  return (data?.List ?? []).map(toStats) as (InforuCampaignStats & { name: string; created: string })[];
 }
 
 export interface InforuMailEvent { Datetime: string; CampaignId: number; Email: string; Action: string; Value?: string; MoreInfo?: string; AdditionalInformation?: string }
