@@ -49,6 +49,7 @@
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
     chevrons: '<path d="m7 15 5 5 5-5M7 9l5-5 5 5"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
     team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M19 8v6M16 11h6"/>',
   };
   const icon = (name, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -949,11 +950,13 @@
       const pct = (n) => (s.sent ? `${((n / s.sent) * 100).toFixed(1)}%` : '—');
       $('#view').innerHTML = `<div class="page-head"><h1>${esc(c.name)} ${badge(c.status)}</h1><div class="row">
         ${['draft', 'scheduled', 'paused'].includes(c.status) ? `<a href="#/campaigns/${id}/edit"><button>עריכה</button></a><button id="test">שליחת בדיקה</button>` : ''}
-        ${['draft'].includes(c.status) ? '<button class="primary" id="send">שליחה</button>' : ''}
-        ${['scheduled', 'sending'].includes(c.status) ? '<button id="pause">השהיה</button>' : ''}
+        ${['draft'].includes(c.status) ? `<button id="schedule">${icon('calendar')}תזמון</button><button class="primary" id="send">שליחה עכשיו</button>` : ''}
+        ${c.status === 'scheduled' ? '<button id="unschedule">ביטול התזמון</button>' : ''}
+        ${c.status === 'sending' ? '<button id="pause">השהיה</button>' : ''}
         ${c.status === 'paused' ? '<button class="primary" id="resume">המשך שליחה</button>' : ''}
         ${!['sent', 'cancelled', 'draft'].includes(c.status) ? '<button class="danger" id="cancel">ביטול</button>' : ''}</div></div>
         ${c.paused_reason ? `<div class="banner">${esc(c.paused_reason)}</div>` : ''}
+        ${c.status === 'scheduled' && c.scheduled_at ? `<div class="banner" style="background:var(--info-soft);color:var(--info)">${icon('calendar')}<span>הדיוור מתוזמן ל-<b>${new Date(c.scheduled_at).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}</b>. רשימת הנמענים תיקבע ברגע השליחה. עד אז אפשר לערוך או לבטל את התזמון.</span></div>` : ''}
         <p>${c.channel === 'inforu' ? '<span class="badge info">נשלח דרך InforU</span> ' : ''}<b>נושא:</b> ${c.is_advertisement && !/^\s*פרסומת/.test(c.subject) ? '<span class="badge warn" title="המילה «פרסומת» תתווסף בתחילת הנושא. מבטלים בעריכת הדיוור">פרסומת:</span> ' : ''}${esc(c.subject)} · <b>שולח:</b> <span class="ltr">${esc(c.from_name)} &lt;${esc(c.from_email)}&gt;</span> · <b>רשימות:</b> ${c.lists.map((l) => esc(l.name)).join(', ') || '—'}
           ${(c.inforu_groups || []).length ? ` · <b>קבוצות InforU:</b> ${c.inforu_groups.map((g) => `${esc(g.name)} (${Number(g.recipients).toLocaleString('he-IL')})`).join(', ')}${c.inforu_groups_sent_at ? ` <span class="badge good">נשלח ${fmtDate(c.inforu_groups_sent_at)}</span>` : ''}` : ''}</p>
         ${c.channel === 'inforu' ? inforuStatsBlock(c) : ''}
@@ -988,6 +991,25 @@
       const act = (sel, fn) => { const b = $(sel); if (b) b.onclick = async () => { try { await fn(); campaigns(id); } catch (err) { toast(err.message); } }; };
       act('#send', async () => { if (confirm('לשלוח את הדיוור עכשיו לכל הנמענים ברשימות?')) await api('POST', `/v1/campaigns/${id}/send`, {}); });
       act('#pause', () => api('POST', `/v1/campaigns/${id}/pause`));
+      act('#unschedule', () => api('POST', `/v1/campaigns/${id}/unschedule`));
+      const sch = $('#schedule');
+      if (sch) sch.onclick = () => {
+        const pad = (n) => String(n).padStart(2, '0');
+        const t = new Date(Date.now() + 3600_000);
+        const day = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+        modal(`<h2>תזמון הדיוור</h2><p class="muted">הדיוור ייצא לבד במועד שתבחר (שעון ישראל). מי שיצטרף לרשימות עד אז יקבל אותו.</p>
+          <form id="sch-f"><div class="row"><label style="flex:1">תאריך<input type="date" name="d" value="${day}" min="${new Date().toISOString().slice(0, 10)}" required></label>
+          <label style="flex:1">שעה<input type="time" name="t" value="${pad(t.getHours())}:00" required></label></div>
+          <p class="error" id="sch-err"></p><div class="row"><button class="primary">תזמון</button><button type="button" data-close>ביטול</button></div></form>`);
+        $('#sch-f').onsubmit = async (e) => {
+          e.preventDefault();
+          const f = formData(e.target);
+          const when = new Date(`${f.d}T${f.t}`);
+          if (!(when > new Date())) return ($('#sch-err').textContent = 'המועד צריך להיות בעתיד');
+          try { await api('POST', `/v1/campaigns/${id}/send`, { scheduled_at: when.toISOString() }); closeModal(); toast('הדיוור תוזמן'); campaigns(id); }
+          catch (err) { $('#sch-err').textContent = err.message; }
+        };
+      };
       act('#resume', () => api('POST', `/v1/campaigns/${id}/resume`));
       act('#cancel', async () => { if (confirm('לבטל את הדיוור? מיילים שעוד לא נשלחו לא יישלחו.')) await api('POST', `/v1/campaigns/${id}/cancel`); });
       act('#test', async () => { const to = prompt('לאיזו כתובת לשלוח בדיקה?', me.user?.email || ''); if (to) { await api('POST', `/v1/campaigns/${id}/test`, { to: [to] }); toast('נשלחה בדיקה'); } });
@@ -996,7 +1018,7 @@
     const list = await api('GET', '/v1/campaigns?limit=100');
     $('#view').innerHTML = `<div class="page-head"><h1>דיוורים</h1><a href="#/campaigns/new"><button class="primary">דיוור חדש</button></a></div>
       <div class="table-wrap"><table><tr><th>שם</th><th>נושא</th><th>מצב</th><th>נוצר</th></tr>
-      ${list.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${esc(c.subject)}</td><td>${badge(c.status)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
+      ${list.map((c) => `<tr><td><a href="#/campaigns/${c.id}">${esc(c.name)}</a></td><td>${esc(c.subject)}</td><td>${badge(c.status)}${c.status === 'scheduled' && c.scheduled_at ? ` <span class="role-hint">${fmtDate(c.scheduled_at)}</span>` : ''}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</table></div>`;
   }
 
   async function templates(id) {

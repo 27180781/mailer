@@ -1084,8 +1084,13 @@ export async function apiRoutes(app: FastifyInstance) {
     r.post('/v1/campaigns/:id/send', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);
       const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
-      const b = z.object({ scheduled_at: z.string().datetime().nullish() }).parse(req.body ?? {});
+      const b = z.object({ scheduled_at: z.string().datetime({ offset: true }).nullish() }).parse(req.body ?? {});
       if (!['draft', 'scheduled'].includes(c.status)) throw new ApiError(409, 'campaign_locked', 'הדיוור כבר נשלח או בתהליך שליחה');
+      if (b.scheduled_at) {
+        const at = new Date(b.scheduled_at).getTime();
+        if (at < Date.now() - 60_000) throw new ApiError(400, 'schedule_in_past', 'מועד השליחה כבר עבר');
+        if (at > Date.now() + 180 * 86_400_000) throw new ApiError(400, 'schedule_too_far', 'אפשר לתזמן עד חצי שנה קדימה');
+      }
       const acc = req.auth.account;
       if (acc.status !== 'active') throw new ApiError(403, 'account_pending', 'החשבון ממתין לאישור. עד האישור אפשר לשלוח רק מיילים בודדים ובדיקות');
       if (!acc.company_name || !acc.company_address) throw new ApiError(400, 'missing_legal_details', 'צריך למלא שם עסק וכתובת בהגדרות החשבון. החוק מחייב אותם בכל דיוור');
@@ -1097,6 +1102,15 @@ export async function apiRoutes(app: FastifyInstance) {
       if (c.channel === 'inforu') checkChannel(acc, 'inforu');
       else await resolveFrom(acc, c.sender_id, { email: c.from_email, name: c.from_name }, 'reject');
       await query(`UPDATE campaigns SET status = 'scheduled', scheduled_at = coalesce($2::timestamptz, now()), paused_reason = NULL, updated_at = now() WHERE id = $1`, [id, b.scheduled_at ?? null]);
+      return campaignView(id);
+    });
+    /** A scheduled campaign goes back to draft (to edit it, or schedule another time) */
+    r.post('/v1/campaigns/:id/unschedule', async (req) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const c = await owned('campaigns', id, req.auth.account.id, 'הדיוור');
+      if (c.status !== 'scheduled') throw new ApiError(409, 'invalid_state', 'הדיוור לא מתוזמן');
+      const r2 = await one(`UPDATE campaigns SET status = 'draft', scheduled_at = NULL, updated_at = now() WHERE id = $1 AND status = 'scheduled' RETURNING id`, [id]);
+      if (!r2) throw new ApiError(409, 'invalid_state', 'הדיוור כבר התחיל לצאת');
       return campaignView(id);
     });
     r.post('/v1/campaigns/:id/pause', async (req) => {

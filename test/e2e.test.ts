@@ -1059,3 +1059,23 @@ test('InforUMobile channel: connect, send a campaign in batches through InforU, 
     inforu.inforuHttp.fetch = realFetch;
   }
 });
+
+test('scheduling: future send waits, can be unscheduled, past times refused', async () => {
+  const u = await api('POST', '/v1/auth/login', undefined, { email: 'dev@retzef.test', password: 'very-secret-2' });
+  const K = u.body.token;
+  const list = await api('POST', '/v1/lists', K, { name: 'תזמון', double_opt_in: false });
+  await api('POST', '/v1/contacts', K, { email: 'sched1@client.test', list_ids: [list.body.id] });
+  const c = await api('POST', '/v1/campaigns', K, { name: 'מתוזמן', subject: 'x', from_name: 'רצף', from_email: 'news@docs.retzef.test', html: '<p>x</p>', list_ids: [list.body.id] });
+  assert.equal((await api('POST', `/v1/campaigns/${c.body.id}/send`, K, { scheduled_at: new Date(Date.now() - 3600_000).toISOString() })).body.error.code, 'schedule_in_past');
+  const at = new Date(Date.now() + 2 * 3600_000).toISOString();
+  const s = await api('POST', `/v1/campaigns/${c.body.id}/send`, K, { scheduled_at: at });
+  assert.equal(s.body.status, 'scheduled');
+  assert.equal(new Date(s.body.scheduled_at).toISOString(), at);
+  await startDueCampaigns();
+  assert.equal((await api('GET', `/v1/campaigns/${c.body.id}`, K)).body.status, 'scheduled', 'not before its time');
+  assert.equal((await query(`SELECT count(*)::int AS n FROM messages WHERE campaign_id = $1`, [c.body.id]))[0].n, 0);
+  const back = await api('POST', `/v1/campaigns/${c.body.id}/unschedule`, K);
+  assert.equal(back.body.status, 'draft');
+  assert.equal(back.body.scheduled_at, null);
+  assert.equal((await api('POST', `/v1/campaigns/${c.body.id}/unschedule`, K)).status, 409);
+});
