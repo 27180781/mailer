@@ -1215,6 +1215,31 @@ export async function apiRoutes(app: FastifyInstance) {
       reply.header('content-disposition', `attachment; filename="campaign.csv"; filename*=UTF-8''${encodeURIComponent(name)}`);
       return '\uFEFF' + lines.join('\r\n') + '\r\n';
     });
+    /** Saves the recipients matching a filter (e.g. who opened) as a new list, to send them a follow-up */
+    r.post('/v1/campaigns/:id/recipients/save-list', async (req, reply) => {
+      const { id } = z.object({ id: uuid }).parse(req.params);
+      const accountId = req.auth.account.id;
+      await owned('campaigns', id, accountId, 'הדיוור');
+      const b = recipientsQuery.extend({ name: z.string().trim().min(1, 'צריך שם לרשימה').max(120) }).parse(req.body ?? {});
+      const result = await tx(async (client) => {
+        const list = (
+          await client.query(`INSERT INTO lists (account_id, name, description, double_opt_in) VALUES ($1, $2, $3, false) RETURNING *`, [
+            accountId, b.name, 'נוצרה מתוצאות דיוור',
+          ])
+        ).rows[0];
+        const added = await client.query(
+          `INSERT INTO list_members (list_id, contact_id, status)
+           SELECT DISTINCT $2::uuid, m.contact_id, 'confirmed' FROM messages m LEFT JOIN contacts c ON c.id = m.contact_id
+           WHERE m.campaign_id = $1 AND NOT m.test AND m.contact_id IS NOT NULL AND ${RECIPIENT_FILTERS[b.filter]}
+             AND ($3::text IS NULL OR m.to_email ILIKE '%' || $3 || '%' OR c.name ILIKE '%' || $3 || '%')
+           ON CONFLICT DO NOTHING`,
+          [id, list.id, b.search ?? null],
+        );
+        return { list, added: added.rowCount ?? 0 };
+      });
+      reply.code(201);
+      return { ...result.list, added: result.added };
+    });
     /** Clicks per link: total clicks and how many different recipients clicked it */
     r.get('/v1/campaigns/:id/links', async (req) => {
       const { id } = z.object({ id: uuid }).parse(req.params);

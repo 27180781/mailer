@@ -902,6 +902,22 @@
     document.querySelectorAll('[data-rf]').forEach((b) => (b.onclick = () => setFilter(b.dataset.rf)));
     document.querySelectorAll('[data-rf-card]').forEach((b) => (b.onclick = () => { setFilter(b.dataset.rfCard); $('#rtabs').scrollIntoView({ behavior: 'smooth', block: 'center' }); }));
     $('#rsearch').onsubmit = (e) => { e.preventDefault(); search = formData(e.target).s.trim(); offset = 0; load(); };
+    $('#save-list').onclick = () => {
+      const label = RFILTERS[filter];
+      modal(`<h2>שמירה כרשימה חדשה</h2>
+        <p class="muted">${filter === 'all' ? 'כל הנמענים של הדיוור' : `הנמענים שמופיעים בסינון «${esc(label)}»`}${search ? ` שתואמים לחיפוש «${esc(search)}»` : ''} יצורפו לרשימה חדשה. הם יישארו גם ברשימות הקודמות, ומי שהסיר את עצמו לא יקבל דיוורים גם מהרשימה החדשה.</p>
+        <form id="sl-f"><label>שם הרשימה<input name="name" value="${esc(`${name} – ${label}`)}" required></label>
+        <p class="error" id="sl-err"></p><div class="row"><button class="primary">יצירת רשימה</button><button type="button" data-close>ביטול</button></div></form>`);
+      $('#sl-f').onsubmit = async (e) => {
+        e.preventDefault();
+        const apiFilter = filter === 'sent' ? 'sent_pending' : filter;
+        try {
+          const r = await api('POST', `/v1/campaigns/${id}/recipients/save-list`, { name: formData(e.target).name, filter: apiFilter, ...(search ? { search } : {}) });
+          modal(`<h2>הרשימה נוצרה</h2><p>הרשימה «${esc(r.name)}» נוצרה עם <b>${r.added.toLocaleString('he-IL')}</b> אנשי קשר.</p>
+            <div class="row"><a href="#/campaigns/new"><button class="primary" data-close>דיוור חדש</button></a><a href="#/lists"><button data-close>לרשימות</button></a><button data-close>סגירה</button></div>`);
+        } catch (err) { $('#sl-err').textContent = err.message; }
+      };
+    };
     $('#csv').onclick = () => {
       const apiFilter = filter === 'sent' ? 'sent_pending' : filter;
       download(`/v1/campaigns/${id}/recipients.csv?${new URLSearchParams({ filter: apiFilter, ...(search ? { search } : {}) })}`, `${name}-${RFILTERS[filter]}.csv`);
@@ -976,7 +992,7 @@
         ${c.channel !== 'inforu' && s.pending && c.started_at && Date.now() - new Date(c.started_at).getTime() > 5 * 60_000 ? `<div class="banner" style="margin-top:16px;background:var(--info-soft);color:var(--info)">${icon('alert')}<span><b>ממתינים לאישור מסירה</b>: המייל יצא מהמערכת, ושרת הדואר של הנמען עוד לא אישר שקיבל אותו. ברוב המקרים Gmail מאט שולח חדש או דיוור גדול שיוצא מהר, ואמזון ממשיכה לנסות שוב ושוב, עד 14 שעות. המספר יתעדכן לבד כשהמיילים יימסרו או יחזרו.</span></div>` : ''}
         <div class="row between" style="margin-top:28px"><h2 style="margin:0">נמענים</h2>
           <div class="row"><form id="rsearch" class="row" style="margin:0"><input name="s" placeholder="חיפוש מייל או שם" style="margin:0;width:200px"></form>
-          <button id="csv">${icon('download')}הורדה לאקסל</button></div></div>
+          <button id="save-list">${icon('list')}שמירה כרשימה</button><button id="csv">${icon('download')}הורדה לאקסל</button></div></div>
         <div class="tabs" id="rtabs" style="margin:12px 0;flex-wrap:wrap">${Object.entries(RFILTERS).map(([k, l]) => `<button data-rf="${k}" class="${k === 'all' ? 'active' : ''}">${l}</button>`).join('')}</div>
         <div id="recipients"><div class="loading"><div class="spinner"></div>טוען…</div></div>
         <div id="links"></div>

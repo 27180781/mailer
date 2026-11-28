@@ -769,6 +769,22 @@ test('contacts by email, status and list changes, contact webhooks (Zapier / Mak
   assert.deepEqual(exact.body.items.map((x: any) => x.email), ['zap3@client.test']);
   assert.equal((await api('GET', '/v1/contacts?email=none@client.test', K)).body.total, 0);
 
+  // Recipients of a campaign saved as a new list (used by "save as list" in the report)
+  {
+    const sl = await api('POST', '/v1/lists', K, { name: 'למבצע', double_opt_in: false });
+    await api('POST', '/v1/contacts/import', K, { contacts: [{ email: 'sl1@client.test' }, { email: 'sl2@client.test' }], list_ids: [sl.body.id], consent_source: 'בדיקת רשימה', consent_declared: true });
+    const camp = await api('POST', '/v1/campaigns', K, { name: 'למבצע', subject: 'x', from_name: 'רצף', from_email: 'news@docs.retzef.test', html: '<p>x</p>', list_ids: [sl.body.id] });
+    await api('POST', `/v1/campaigns/${camp.body.id}/send`, K, {});
+    await startDueCampaigns();
+    while ((await sendBatch(50)) > 0);
+    await query(`UPDATE messages SET opened_at = now() WHERE campaign_id = $1 AND to_email = 'sl1@client.test'`, [camp.body.id]);
+    const saved = await api('POST', `/v1/campaigns/${camp.body.id}/recipients/save-list`, K, { name: 'פתחו את המבצע', filter: 'opened' });
+    assert.equal(saved.status, 201, JSON.stringify(saved.body));
+    assert.equal(saved.body.added, 1);
+    const members = await api('GET', `/v1/contacts?list_id=${saved.body.id}`, K);
+    assert.deepEqual(members.body.items.map((x: any) => x.email), ['sl1@client.test']);
+  }
+
   const ev = await events();
   for (const t of ['contact.created', 'contact.updated', 'contact.unsubscribed', 'contact.added_to_list', 'contact.removed_from_list', 'contact.deleted']) assert.ok(ev.includes(t), `${t} emitted`);
   await api('DELETE', `/v1/webhooks/${hook.body.id}`, K);
