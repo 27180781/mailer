@@ -1125,7 +1125,10 @@
       <label>תבנית שם השולח<input name="fallback_name_template" value="${esc(a.fallback_name_template)}"></label>
       <p class="muted">{{name}} = השם שהתבקש, {{account}} = שם החשבון. למשל: «{{name}} באמצעות רצף».</p>` : ''}
       <button class="primary">שמירה</button></form>
-      ${canAdmin() ? `<div class="card" style="margin-top:20px" id="inforu-card"></div>` : ''}`;
+      ${canAdmin() ? `<div class="card" style="margin-top:20px" id="inforu-card"></div>` : ''}
+      <div class="card" style="margin-top:20px"><h2 style="margin-top:0">חיבור ל-Claude</h2>
+        <p class="muted">אפשר לנהל את המערכת מתוך Claude: אנשי קשר, רשימות, תבניות, דיוורים, סטטיסטיקה, דומיינים וצוות. ב-Claude נכנסים להגדרות ← Connectors ← Add custom connector, מדביקים את הכתובת, ומתחברים עם המייל והסיסמה של המערכת. Claude יעבוד בשמך, לפי ההרשאות שלך בכל עסק.</p>
+        <div class="keybox ltr" style="display:flex;align-items:center;justify-content:space-between;gap:12px"><span>${esc(location.origin)}/mcp</span><button class="copy" data-copy="${esc(location.origin)}/mcp">העתקה</button></div></div>`;
     renderInforu();
     $('#f').onsubmit = async (e) => {
       e.preventDefault();

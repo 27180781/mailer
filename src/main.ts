@@ -1,6 +1,9 @@
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
 import fastifyStatic from '@fastify/static';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { buildMcpServer, apiCaller } from './mcp/server.js';
+import { oauthRoutes } from './routes/oauth.js';
 import { ZodError } from 'zod';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +48,30 @@ export async function buildServer() {
 
   await app.register(publicRoutes);
   await app.register(apiRoutes);
+  await app.register(oauthRoutes);
+
+  // MCP (Claude connector). Stateless Streamable HTTP: a fresh server per request, acting with the caller's token.
+  const mcpUnauthorized = (reply: any) =>
+    reply
+      .code(401)
+      .header('www-authenticate', `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource"`)
+      .send({ error: { code: 'unauthorized', message: 'צריך להתחבר. מוסיפים את המחבר ב-Claude ומתחברים עם המשתמש של מערכת הדיוור' } });
+  app.post('/mcp', async (req, reply) => {
+    const auth = req.headers.authorization ?? '';
+    if (!/^Bearer (ms_|mk_)/.test(auth)) return mcpUnauthorized(reply);
+    // Check the token before doing any work, so an expired one gets a 401 (Claude then refreshes it)
+    const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: auth } });
+    if (me.statusCode === 401) return mcpUnauthorized(reply);
+    const server = buildMcpServer(apiCaller(app, auth));
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    reply.hijack();
+    reply.raw.on('close', () => { void transport.close(); void server.close(); });
+    await server.connect(transport);
+    await transport.handleRequest(req.raw, reply.raw, req.body);
+  });
+  const mcpNotAllowed = async (_req: any, reply: any) => reply.code(405).header('allow', 'POST').send({ error: { code: 'method_not_allowed', message: 'MCP endpoint: POST only' } });
+  app.get('/mcp', mcpNotAllowed);
+  app.delete('/mcp', mcpNotAllowed);
 
   const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
   await app.register(fastifyStatic, { root: publicDir, prefix: '/app/' });

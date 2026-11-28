@@ -1095,3 +1095,90 @@ test('scheduling: future send waits, can be unscheduled, past times refused', as
   assert.equal(back.body.scheduled_at, null);
   assert.equal((await api('POST', `/v1/campaigns/${c.body.id}/unschedule`, K)).status, 409);
 });
+
+test('MCP connector: OAuth (register, sign in, PKCE token, refresh) and tools with the user\'s roles', async () => {
+  const { createHash, randomBytes } = await import('node:crypto');
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const base = `http://127.0.0.1:${(app.server.address() as any).port}`;
+  try {
+    // Unauthenticated: 401 pointing at the OAuth metadata
+    const anon = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: '{}' });
+    assert.equal(anon.status, 401);
+    assert.match(anon.headers.get('www-authenticate') ?? '', /resource_metadata=/);
+    const meta = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+    assert.deepEqual(meta.code_challenge_methods_supported, ['S256']);
+
+    // Dynamic registration
+    const reg = await (await fetch(meta.registration_endpoint.replace(/^https?:\/\/[^/]+/, base), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }) })).json();
+    assert.match(reg.client_id, /^mcp_/);
+    const bad = await fetch(`${base}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://evil.example/cb'] }) });
+    assert.equal(bad.status, 400);
+
+    // Authorize: login page, wrong password, then right password → code
+    const verifier = randomBytes(32).toString('base64url');
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    const params = { response_type: 'code', client_id: reg.client_id, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_challenge: challenge, code_challenge_method: 'S256', state: 'xyz' };
+    const page = await fetch(`${base}/oauth/authorize?${new URLSearchParams(params)}`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /חיבור Claude/);
+    const wrong = await fetch(`${base}/oauth/authorize`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ ...params, email: 'dev@retzef.test', password: 'nope' }) });
+    assert.equal(wrong.status, 401);
+    const ok = await fetch(`${base}/oauth/authorize`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ ...params, email: 'dev@retzef.test', password: 'very-secret-2' }) });
+    assert.equal(ok.status, 302);
+    const back = new URL(ok.headers.get('location')!);
+    assert.equal(back.origin + back.pathname, 'https://claude.ai/api/mcp/auth_callback');
+    assert.equal(back.searchParams.get('state'), 'xyz');
+    const code = back.searchParams.get('code')!;
+
+    const tokenReq = (body: Record<string, string>) => fetch(`${base}/oauth/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) });
+    assert.equal((await tokenReq({ grant_type: 'authorization_code', code, code_verifier: 'wrong'.padEnd(43, 'x'), client_id: reg.client_id, redirect_uri: params.redirect_uri })).status, 400, 'PKCE checked');
+    // The failed attempt used up the code; get a fresh one
+    const ok2 = await fetch(`${base}/oauth/authorize`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ ...params, email: 'dev@retzef.test', password: 'very-secret-2' }) });
+    const code2 = new URL(ok2.headers.get('location')!).searchParams.get('code')!;
+    const tok = await (await tokenReq({ grant_type: 'authorization_code', code: code2, code_verifier: verifier, client_id: reg.client_id, redirect_uri: params.redirect_uri })).json();
+    assert.match(tok.access_token, /^ms_/);
+    assert.match(tok.refresh_token, /^mr_/);
+    assert.equal((await tokenReq({ grant_type: 'authorization_code', code: code2, code_verifier: verifier, client_id: reg.client_id, redirect_uri: params.redirect_uri })).status, 400, 'codes are single use');
+    const refreshed = await (await tokenReq({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: reg.client_id })).json();
+    assert.match(refreshed.access_token, /^ms_/);
+    assert.equal((await tokenReq({ grant_type: 'refresh_token', refresh_token: tok.refresh_token })).status, 400, 'refresh tokens rotate');
+
+    // A real MCP client with the access token
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${refreshed.access_token}` } } }));
+    const tools = (await client.listTools()).tools.map((t) => t.name);
+    for (const t of ['whoami', 'switch_account', 'search_contacts', 'create_campaign', 'send_campaign', 'campaign_recipients', 'inforu_groups', 'invite_team_member']) assert.ok(tools.includes(t), t);
+    assert.ok(tools.length >= 50);
+    const sendTool = (await client.listTools()).tools.find((t) => t.name === 'send_campaign')!;
+    assert.equal(sendTool.annotations?.destructiveHint, true);
+
+    const who = await client.callTool({ name: 'whoami', arguments: {} }) as any;
+    assert.equal(JSON.parse(who.content[0].text).user.email, 'dev@retzef.test');
+    const created = await client.callTool({ name: 'create_list', arguments: { name: 'מ-Claude', double_opt_in: false } }) as any;
+    const listId = JSON.parse(created.content[0].text).id;
+    await client.callTool({ name: 'upsert_contact', arguments: { email: 'claude1@client.test', name: 'קלוד', list_ids: [listId] } });
+    const found = await client.callTool({ name: 'search_contacts', arguments: { list_id: listId } }) as any;
+    assert.equal(JSON.parse(found.content[0].text).total, 1);
+    // Errors come back in Hebrew as tool errors
+    const err = await client.callTool({ name: 'get_contact', arguments: { contact: 'nobody@nowhere.test' } }) as any;
+    assert.equal(err.isError, true);
+    assert.match(err.content[0].text, /לא נמצא/);
+    await client.close();
+
+    // Roles apply through MCP too: a viewer cannot write
+    const viewerId = (await one(`SELECT id FROM users WHERE email = 'dev@retzef.test'`)).id;
+    const acct = (await one(`SELECT account_id FROM sessions WHERE token_hash = $1`, [createHash('sha256').update(refreshed.access_token).digest('hex')])).account_id;
+    await query(`UPDATE account_members SET role = 'viewer' WHERE user_id = $1 AND account_id = $2`, [viewerId, acct]);
+    const c2 = new Client({ name: 'test', version: '1.0.0' });
+    await c2.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${refreshed.access_token}` } } }));
+    const denied = await c2.callTool({ name: 'create_list', arguments: { name: 'אסור' } }) as any;
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /צופה/);
+    await c2.close();
+    await query(`UPDATE account_members SET role = 'owner' WHERE user_id = $1 AND account_id = $2`, [viewerId, acct]);
+  } finally {
+    await app.close().catch(() => {});
+  }
+});
